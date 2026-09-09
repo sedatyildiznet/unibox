@@ -19,6 +19,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { isPermissionGranted, requestPermission, sendNotification, onAction } from '@tauri-apps/plugin-notification';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getVersion } from '@tauri-apps/api/app';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import {
@@ -615,7 +616,7 @@ export function App() {
                       <button title="Reply" onClick={() => { setReply(message); setEditing(null); }}>Reply</button>
                       {message.mine && message.msgtype === 'm.text' && <button title="Edit" onClick={() => { setEditing(message); setReply(null); setComposer(message.body); }}>Edit</button>}
                       <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍').catch(() => setRuntimeError('Reaction could not be sent.'))}>👍</button>
-                      {message.mine && <button title="Delete message" onClick={() => { if (window.confirm('Delete this message for everyone, where supported?')) void inbox?.deleteMessage(selectedRoom.id, message.id).catch(() => setRuntimeError('Message could not be deleted.')); }}><Trash2 size={13} /></button>}
+                      {message.mine && <button title="Delete message" onClick={() => void confirm('Delete this message for everyone, where supported?', { title: 'Delete message', kind: 'warning' }).then(confirmed => { if (confirmed) return inbox?.deleteMessage(selectedRoom.id, message.id); }).catch(() => setRuntimeError('Message could not be deleted.'))}><Trash2 size={13} /></button>}
                     </div>
                   </div>
                 </div>

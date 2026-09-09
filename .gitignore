@@ -13,3 +13,6 @@ target/
 *.key
 *.pem
 runtime-data/
+
+*.tsbuildinfo
+runtime-e2e.json

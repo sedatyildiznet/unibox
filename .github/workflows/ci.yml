@@ -17,9 +17,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: pnpm install --frozen-lockfile=false
-      - run: python scripts/verify-registry.py
+      - name: Verify connector registry
+        run: python scripts/verify-registry.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify managed runtime contract
+        run: python scripts/verify-runtime-contract.py
       - name: Validate runtime shell scripts
         shell: bash
         run: |
@@ -35,9 +38,13 @@ jobs:
             [ref]$errors
           )
           if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
       - run: pnpm check
       - run: pnpm build
       - run: cargo check --workspace
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: pnpm tauri build --no-bundle
       - uses: actions/upload-artifact@v4

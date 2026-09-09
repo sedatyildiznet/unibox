@@ -21,14 +21,25 @@ jobs:
           node-version: 22
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile=false
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Verify connector registry
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/verify-registry.py
+
+      - name: Verify managed runtime contract
+        run: python scripts/verify-runtime-contract.py
+
+      - name: Verify Rust workspace
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
 
       - name: Verify updater signing configuration
         shell: pwsh

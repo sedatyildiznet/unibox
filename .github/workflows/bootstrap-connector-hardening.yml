@@ -1,0 +1,109 @@
+name: Bootstrap connector hardening
+
+on:
+  push:
+    branches: [stability-hardening]
+    paths:
+      - '.github/workflows/bootstrap-connector-hardening.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stability-hardening
+      - name: Apply connector reliability patch
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('apps/desktop/src-tauri/resources/runtime/unibox-connector.sh')
+          text = path.read_text()
+
+          old = '''register_appservice() {
+            local registration="$1"
+            local target="$ETC/appservices/$(basename "$registration")"
+            install -m 0640 -o root -g unibox "$registration" "$target"
+            /opt/unibox/bin/unibox-appservice-register "$target"
+            systemctl restart unibox-synapse
+            for _ in $(seq 1 30); do
+              curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 && return 0
+              sleep 1
+            done
+            fail 'Synapse did not recover after appservice registration'
+          }
+          '''
+          new = '''register_appservice() {
+            local registration="$1"
+            local target="$ETC/appservices/$(basename "$registration")"
+            install -m 0640 -o root -g unibox "$registration" "$target"
+            /opt/unibox/bin/unibox-appservice-register "$target"
+            systemctl restart unibox-synapse
+            for _ in $(seq 1 30); do
+              curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 && return 0
+              sleep 1
+            done
+
+            printf 'Appservice registration made Synapse unhealthy; rolling back %s.\\n' "$target" >&2
+            /opt/unibox/bin/unibox-appservice-unregister "$target" || true
+            rm -f "$target"
+            systemctl restart unibox-synapse || true
+            for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1; then
+                fail 'Connector appservice registration was rejected and rolled back safely'
+              fi
+              sleep 1
+            done
+            fail 'Connector appservice registration failed and Synapse could not recover automatically'
+          }
+          '''
+          if old not in text:
+              raise SystemExit('register_appservice block did not match expected source')
+          text = text.replace(old, new, 1)
+
+          marker = 'update_release_go() {\n'
+          python_update = '''update_python_googlechat() {
+            local id="$1" repo="$2" dir="$ROOT/$1" active="$ROOT/$1/venv"
+            local staging="$ROOT/$1/venv.staging" backup="$ROOT/$1/venv.rollback"
+            [ -x "$active/bin/python" ] || fail "$id is not installed"
+            rm -rf "$staging" "$backup"
+            python3 -m venv "$staging"
+            "$staging/bin/pip" install --disable-pip-version-check --upgrade pip wheel setuptools >/dev/null
+            "$staging/bin/pip" install --disable-pip-version-check "git+https://github.com/$repo.git" >/dev/null
+            systemctl stop "unibox-$id.service" || true
+            mv "$active" "$backup"
+            mv "$staging" "$active"
+            if systemctl start "unibox-$id.service" && sleep 3 && systemctl is-active --quiet "unibox-$id.service"; then
+              rm -rf "$backup"
+              printf '%s Python connector updated successfully.\\n' "$id"
+            else
+              systemctl stop "unibox-$id.service" || true
+              rm -rf "$active"
+              mv "$backup" "$active"
+              systemctl start "unibox-$id.service" || true
+              fail "$id Python connector update failed and was rolled back"
+            fi
+          }
+
+          '''
+          if marker not in text:
+              raise SystemExit('update_release_go marker not found')
+          text = text.replace(marker, python_update + marker, 1)
+          old_case = "      python-legacy) fail 'Python legacy connector updates are applied by reinstalling the connector in this release' ;;"
+          new_case = '      python-legacy) update_python_googlechat "$id" "$repo" ;;'
+          if old_case not in text:
+              raise SystemExit('python update case did not match expected source')
+          text = text.replace(old_case, new_case, 1)
+          path.write_text(text)
+      - name: Validate patched shell
+        run: bash -n apps/desktop/src-tauri/resources/runtime/unibox-connector.sh
+      - name: Commit connector hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/src-tauri/resources/runtime/unibox-connector.sh
+          git commit -m "fix: add connector registration and update rollback"
+          git push origin HEAD:stability-hardening

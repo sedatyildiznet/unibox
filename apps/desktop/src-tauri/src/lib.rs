@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 use unibox_core::{
     parse_registry, ClientHttpRequest, ClientHttpResponse, ConnectorDefinition, ConnectorStatus,
@@ -22,6 +23,23 @@ impl AppState {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn normalize_windows_path(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn normalize_windows_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 #[tauri::command]
 fn connector_registry(state: State<'_, AppState>) -> Vec<ConnectorDefinition> {
     state.registry.clone()
@@ -34,13 +52,14 @@ async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, Str
 
 #[tauri::command]
 fn bootstrap_runtime(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
-    let script = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join("resources")
-        .join("runtime")
-        .join("bootstrap.ps1");
+    let script = normalize_windows_path(
+        app.path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources")
+            .join("runtime")
+            .join("bootstrap.ps1"),
+    );
     state
         .runtime
         .bootstrap(&script)
@@ -143,7 +162,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_root = app.path().app_local_data_dir()?.join("runtime");
+            let data_root =
+                normalize_windows_path(app.path().app_local_data_dir()?.join("runtime"));
             let runtime = RuntimeManager::new(data_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;
             app.manage(AppState { runtime, registry });

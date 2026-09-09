@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -6,11 +6,14 @@ import {
   Download,
   Inbox,
   LoaderCircle,
+  MoreHorizontal,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Settings,
   Star,
+  Trash2,
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -19,12 +22,16 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import {
   backend,
   type ConnectorDefinition,
+  type ConnectorStatus,
   type LoginField,
   type LoginFlow,
   type LoginStep,
   type RuntimeStatus,
 } from '../lib/backend';
 import { startInbox, type InboxController, type InboxRoom } from '../lib/matrix';
+
+type NavMode = 'all' | 'unread' | 'mentions' | 'archive' | 'favorites';
+type ListFilter = 'all' | 'direct' | 'groups' | 'unread' | 'favorites';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -43,8 +50,14 @@ export function App() {
   const [inbox, setInbox] = useState<InboxController | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [navMode, setNavMode] = useState<NavMode>('all');
+  const [listFilter, setListFilter] = useState<ListFilter>('all');
+  const [serviceFilter, setServiceFilter] = useState<string | null>(null);
   const [composer, setComposer] = useState('');
   const [showServices, setShowServices] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [connectorStatuses, setConnectorStatuses] = useState<Record<string, ConnectorStatus>>({});
+  const [settingsBusyId, setSettingsBusyId] = useState<string | null>(null);
   const [activeConnector, setActiveConnector] = useState<ConnectorDefinition | null>(null);
   const [connectorBusy, setConnectorBusy] = useState(false);
   const [connectorError, setConnectorError] = useState('');
@@ -53,15 +66,37 @@ export function App() {
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? rooms[0];
-  const filteredRooms = useMemo(() => {
+  const visibleRooms = useMemo(() => {
+    let next = navMode === 'archive' ? rooms.filter(room => room.archived) : rooms.filter(room => !room.archived);
+
+    if (navMode === 'unread') next = next.filter(room => room.unread > 0);
+    if (navMode === 'mentions') next = next.filter(room => room.mentions > 0);
+    if (navMode === 'favorites') next = next.filter(room => room.favorite);
+    if (serviceFilter) next = next.filter(room => room.service === serviceFilter);
+
+    if (listFilter === 'direct') next = next.filter(room => room.direct);
+    if (listFilter === 'groups') next = next.filter(room => !room.direct);
+    if (listFilter === 'unread') next = next.filter(room => room.unread > 0);
+    if (listFilter === 'favorites') next = next.filter(room => room.favorite);
+
     const needle = query.trim().toLowerCase();
-    if (!needle) return rooms;
-    return rooms.filter(room =>
-      `${room.name} ${room.service} ${room.preview}`.toLowerCase().includes(needle),
-    );
-  }, [rooms, query]);
+    if (needle) {
+      next = next.filter(room =>
+        `${room.name} ${room.service} ${room.preview}`.toLowerCase().includes(needle),
+      );
+    }
+    return next;
+  }, [rooms, navMode, listFilter, serviceFilter, query]);
+
+  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? visibleRooms[0] ?? rooms[0];
+  const networks = [...new Set(rooms.map(room => room.service))].sort();
+  const allCount = rooms.filter(room => !room.archived).length;
+  const unreadCount = rooms.filter(room => !room.archived && room.unread > 0).length;
+  const mentionCount = rooms.filter(room => !room.archived && room.mentions > 0).length;
+  const archiveCount = rooms.filter(room => room.archived).length;
+  const favoriteCount = rooms.filter(room => !room.archived && room.favorite).length;
 
   async function refreshRuntime(): Promise<RuntimeStatus> {
     const next = await backend.status();
@@ -104,11 +139,22 @@ export function App() {
   }, [runtime?.synapse_ready, runtime?.matrix_session_ready]);
 
   useEffect(() => {
-    if (!selectedRoomId && rooms[0]) setSelectedRoomId(rooms[0].id);
+    if (!selectedRoomId && visibleRooms[0]) setSelectedRoomId(visibleRooms[0].id);
     if (selectedRoomId && rooms.length && !rooms.some(room => room.id === selectedRoomId)) {
-      setSelectedRoomId(rooms[0].id);
+      setSelectedRoomId(visibleRooms[0]?.id ?? rooms[0].id);
     }
-  }, [rooms, selectedRoomId]);
+  }, [rooms, selectedRoomId, visibleRooms]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!activeConnector || !loginStep) return;
@@ -178,6 +224,37 @@ export function App() {
       setUpdateMessage('Update check failed');
     } finally {
       setUpdating(false);
+    }
+  }
+
+  async function refreshConnectorStatuses(): Promise<void> {
+    const entries = await Promise.all(
+      registry.map(async connector => [connector.id, await backend.connectorStatus(connector.id)] as const),
+    );
+    setConnectorStatuses(Object.fromEntries(entries));
+  }
+
+  async function openSettings(): Promise<void> {
+    setShowSettings(true);
+    try {
+      await refreshConnectorStatuses();
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    }
+  }
+
+  async function manageConnector(connector: ConnectorDefinition, action: 'start' | 'stop' | 'update'): Promise<void> {
+    setSettingsBusyId(connector.id);
+    setRuntimeError('');
+    try {
+      if (action === 'start') await backend.startConnector(connector.id);
+      if (action === 'stop') await backend.stopConnector(connector.id);
+      if (action === 'update') await backend.updateConnector(connector.id);
+      await refreshConnectorStatuses();
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    } finally {
+      setSettingsBusyId(null);
     }
   }
 
@@ -273,15 +350,44 @@ export function App() {
     }
   }
 
+  async function selectRoom(roomId: string): Promise<void> {
+    setSelectedRoomId(roomId);
+    try {
+      await inbox?.markRead(roomId);
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    }
+  }
+
   async function sendMessage(): Promise<void> {
     if (!inbox || !selectedRoom || !composer.trim()) return;
     const text = composer;
     setComposer('');
     try {
       await inbox.sendText(selectedRoom.id, text);
+      await inbox.markRead(selectedRoom.id);
     } catch (error) {
       setRuntimeError(errorText(error));
       setComposer(text);
+    }
+  }
+
+  async function toggleFavorite(): Promise<void> {
+    if (!inbox || !selectedRoom) return;
+    try {
+      await inbox.toggleFavorite(selectedRoom.id, !selectedRoom.favorite);
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    }
+  }
+
+  async function toggleArchive(): Promise<void> {
+    if (!inbox || !selectedRoom) return;
+    try {
+      await inbox.toggleArchived(selectedRoom.id, !selectedRoom.archived);
+      setSelectedRoomId(null);
+    } catch (error) {
+      setRuntimeError(errorText(error));
     }
   }
 
@@ -295,7 +401,7 @@ export function App() {
           <h2>Set up your private local engine</h2>
           <p>
             Unibox stores its Matrix database, connector sessions, media and settings on this PC
-            inside an isolated <strong>UniboxRuntime</strong> WSL distribution.
+            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.
           </p>
           <div className="privacyCard">
             <strong>No Unibox cloud account.</strong>
@@ -307,8 +413,8 @@ export function App() {
             {runtimeBusy ? 'Installing local engine…' : 'Install local engine'}
           </button>
           <small>
-            Windows 10/11 with WSL2 is required. The official Ubuntu rootfs is checksum-verified
-            before import.
+            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
+            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.
           </small>
         </div>
       </div>
@@ -323,41 +429,60 @@ export function App() {
           <div><strong>Unibox</strong><span>All your chats. One box.</span></div>
         </div>
         <nav>
-          <button className="active"><Inbox size={17} />All Chats <b>{rooms.length}</b></button>
-          <button><Star size={17} />Unread</button>
-          <button><AtSign size={17} />Mentions</button>
-          <button><Archive size={17} />Archive</button>
+          <button className={navMode === 'all' ? 'active' : ''} onClick={() => setNavMode('all')}><Inbox size={17} />All Chats <b>{allCount}</b></button>
+          <button className={navMode === 'unread' ? 'active' : ''} onClick={() => setNavMode('unread')}><Star size={17} />Unread <b>{unreadCount}</b></button>
+          <button className={navMode === 'mentions' ? 'active' : ''} onClick={() => setNavMode('mentions')}><AtSign size={17} />Mentions <b>{mentionCount}</b></button>
+          <button className={navMode === 'favorites' ? 'active' : ''} onClick={() => setNavMode('favorites')}><Star size={17} />Favorites <b>{favoriteCount}</b></button>
+          <button className={navMode === 'archive' ? 'active' : ''} onClick={() => setNavMode('archive')}><Archive size={17} />Archive <b>{archiveCount}</b></button>
         </nav>
         <div className="sectionTitle">Connected networks</div>
-        {[...new Set(rooms.map(room => room.service))].slice(0, 8).map(service => (
-          <button className="service" key={service}>
+        {networks.slice(0, 10).map(service => (
+          <button
+            className={serviceFilter === service ? 'service activeService' : 'service'}
+            key={service}
+            onClick={() => setServiceFilter(current => current === service ? null : service)}
+          >
             <span className="serviceDot" />{service}<i />
           </button>
         ))}
         <button className="add" onClick={() => setShowServices(true)}><Plus size={17} />Add service</button>
         <div className="sidebarBottom">
           <button disabled={updating} onClick={() => void runUpdate()}><Download size={16} />{updateMessage}</button>
-          <button><Settings size={16} />Settings</button>
+          <button onClick={() => void openSettings()}><Settings size={16} />Settings</button>
         </div>
       </aside>
 
       <section className="listPane">
         <div className="search">
           <Search size={17} />
-          <input value={query} onChange={event => setQuery(event.target.value)} aria-label="Search" placeholder="Search conversations…" />
+          <input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="Search" placeholder="Search conversations…" />
           <kbd>Ctrl K</kbd>
         </div>
-        <div className="filters"><span className="selected">All</span><span>Direct</span><span>Groups</span><span>Unread</span><span>Favorites</span></div>
+        <div className="filters">
+          {(['all', 'direct', 'groups', 'unread', 'favorites'] as ListFilter[]).map(filter => (
+            <button key={filter} className={listFilter === filter ? 'selected' : ''} onClick={() => setListFilter(filter)}>
+              {filter[0].toUpperCase() + filter.slice(1)}
+            </button>
+          ))}
+        </div>
+        {serviceFilter && (
+          <div className="activeFilter">Showing {serviceFilter}<button onClick={() => setServiceFilter(null)}><X size={14} /></button></div>
+        )}
         <div className="chatList">
-          {filteredRooms.length === 0 && <div className="emptyList">No conversations yet.<br />Add a service to get started.</div>}
-          {filteredRooms.map(room => (
+          {visibleRooms.length === 0 && <div className="emptyList">No conversations match this view.<br />Add a service or change the filters.</div>}
+          {visibleRooms.map(room => (
             <button
               key={room.id}
-              onClick={() => setSelectedRoomId(room.id)}
+              onClick={() => void selectRoom(room.id)}
               className={selectedRoom?.id === room.id ? 'chat activeChat' : 'chat'}
             >
               <div className="avatar">{room.name[0]?.toUpperCase() || '?'}</div>
-              <div className="chatMeta"><strong>{room.name}</strong><small>{room.service}</small><span>{room.preview}</span></div>
+              <div className="chatMeta">
+                <strong>{room.name}{room.favorite ? <Star size={12} className="inlineStar" /> : null}</strong>
+                <small>{room.service}</small>
+                <span>{room.preview}</span>
+              </div>
+              {room.unread > 0 && <span className="unreadBadge">{room.unread > 99 ? '99+' : room.unread}</span>}
             </button>
           ))}
         </div>
@@ -367,23 +492,35 @@ export function App() {
         {selectedRoom ? (
           <>
             <header>
-              <div><h2>{selectedRoom.name}</h2><span>{selectedRoom.service}</span></div>
-              <div className="headerActions"><button><Search size={18} /></button><button><Settings size={18} /></button></div>
+              <div><h2>{selectedRoom.name}</h2><span>{selectedRoom.service}{selectedRoom.unread > 0 ? ` · ${selectedRoom.unread} unread` : ''}</span></div>
+              <div className="headerActions">
+                <button title={selectedRoom.favorite ? 'Remove from favorites' : 'Add to favorites'} className={selectedRoom.favorite ? 'selectedAction' : ''} onClick={() => void toggleFavorite()}><Star size={18} /></button>
+                <button title={selectedRoom.archived ? 'Restore conversation' : 'Archive conversation'} onClick={() => void toggleArchive()}><Archive size={18} /></button>
+                <button title="Conversation options"><MoreHorizontal size={18} /></button>
+              </div>
             </header>
+            {runtimeError && <div className="conversationError"><ErrorBox text={runtimeError} /></div>}
             <div className="messages">
               {selectedRoom.messages.map(message => (
                 <div key={message.id} className={message.mine ? 'bubble mine' : 'bubble'}>
                   <b>{message.mine ? 'You' : message.sender}</b>
-                  <p>{message.body}</p>
-                  <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                  <p>{message.body || `[${message.msgtype.replace('m.', '')}]`}</p>
+                  <div className="bubbleFooter">
+                    <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                    <div className="bubbleActions">
+                      <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍')}>👍</button>
+                      {message.mine && <button title="Delete message" onClick={() => void inbox?.deleteMessage(selectedRoom.id, message.id)}><Trash2 size={13} /></button>}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
             <div className="composer">
-              <button aria-label="Add attachment"><Plus size={18} /></button>
+              <button aria-label="Add attachment" title="Attachments are coming in the next media capability pass"><Plus size={18} /></button>
               <input
                 value={composer}
                 onChange={event => setComposer(event.target.value)}
+                onFocus={() => void inbox?.markRead(selectedRoom.id)}
                 onKeyDown={event => {
                   if (event.key === 'Enter' && !event.shiftKey) void sendMessage();
                 }}
@@ -421,6 +558,47 @@ export function App() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="modalBackdrop" onMouseDown={() => setShowSettings(false)}>
+          <div className="modal settingsModal" onMouseDown={event => event.stopPropagation()}>
+            <div className="modalHeader">
+              <div><h2>Settings</h2><p>Local engine, connector health and updates.</p></div>
+              <button onClick={() => setShowSettings(false)}><X size={20} /></button>
+            </div>
+            <div className="privacyCard settingsPrivacy">
+              <strong>Local-first by design</strong>
+              <span>Synapse, PostgreSQL, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>
+            </div>
+            <div className="settingsSection">
+              <h3>Local engine</h3>
+              <div className="settingsRow"><span>Synapse</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
+              <div className="settingsRow"><span>Matrix session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
+              <div className="settingsRow"><span>Data</span><code>{runtime.data_root}</code></div>
+            </div>
+            <div className="settingsSection">
+              <div className="settingsTitleRow"><h3>Connectors</h3><button onClick={() => void refreshConnectorStatuses()}><RefreshCw size={15} />Refresh</button></div>
+              <div className="connectorSettingsList">
+                {registry.filter(item => connectorStatuses[item.id]?.installed).map(connector => {
+                  const status = connectorStatuses[connector.id];
+                  const busy = settingsBusyId === connector.id;
+                  return (
+                    <div className="connectorSettingsRow" key={connector.id}>
+                      <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>
+                      <div>
+                        <button disabled={busy} onClick={() => void manageConnector(connector, status?.running ? 'stop' : 'start')}>{status?.running ? 'Stop' : 'Start'}</button>
+                        <button disabled={busy} onClick={() => void manageConnector(connector, 'update')}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}Update</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!registry.some(item => connectorStatuses[item.id]?.installed) && <div className="emptyList">No connectors installed yet.</div>}
+              </div>
+            </div>
+            <button className="primaryButton settingsUpdate" disabled={updating} onClick={() => void runUpdate()}><Download size={17} />{updateMessage}</button>
           </div>
         </div>
       )}

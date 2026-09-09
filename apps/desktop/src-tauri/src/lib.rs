@@ -28,8 +28,8 @@ fn connector_registry(state: State<'_, AppState>) -> Vec<ConnectorDefinition> {
 }
 
 #[tauri::command]
-async fn runtime_status(state: State<'_, AppState>) -> RuntimeStatus {
-    state.runtime.status().await
+async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    Ok(state.runtime.status().await)
 }
 
 #[tauri::command]

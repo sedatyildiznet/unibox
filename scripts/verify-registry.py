@@ -58,10 +58,12 @@ def main() -> int:
 
         adapter = connector.get("adapter", "")
         try:
-            if adapter == "python-legacy":
+            if adapter in {"python-legacy", "source-go"}:
                 repo = github_json(f"https://api.github.com/repos/{repo_name}")
                 if repo.get("archived"):
                     errors.append(f"{cid}: upstream repository {repo_name} is archived")
+                if repo.get("disabled"):
+                    errors.append(f"{cid}: upstream repository {repo_name} is disabled")
                 continue
 
             release = github_json(f"https://api.github.com/repos/{repo_name}/releases/latest")
@@ -81,7 +83,7 @@ def main() -> int:
             errors.append(f"{cid}: GitHub API returned HTTP {exc.code} for {repo_name}")
         except urllib.error.URLError as exc:
             errors.append(f"{cid}: GitHub API network error for {repo_name}: {exc.reason}")
-        except Exception as exc:  # keep validation actionable instead of losing later connector errors
+        except Exception as exc:
             errors.append(f"{cid}: unexpected validation error for {repo_name}: {exc}")
 
     if errors:
@@ -90,7 +92,7 @@ def main() -> int:
             print(f" - {error}", file=sys.stderr)
         return 1
 
-    print(f"Validated {len(connectors)} connector definitions and their upstream release assets.")
+    print(f"Validated {len(connectors)} connector definitions and their upstream release assets/repositories.")
     return 0
 
 

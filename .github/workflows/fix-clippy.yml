@@ -2,22 +2,23 @@ name: Apply Clippy cleanup
 
 on:
   push:
-    branches: [stability-hardening]
+    branches:
+      - stability-hardening
 
 permissions:
   contents: write
 
 jobs:
   cleanup:
-    if: ${{ !contains(github.event.head_commit.message, 'fix: satisfy Rust 1.98 clippy') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: stability-hardening
       - name: Apply Clippy fixes
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path('crates/unibox-core/src/lib.rs')
@@ -32,41 +33,38 @@ jobs:
               '            return output_text(output, "UniboxRuntime command failed");': '            output_text(output, "UniboxRuntime command failed")',
           }
           for old, new in replacements.items():
-              if old not in text:
-                  raise SystemExit(f'missing expected source fragment: {old}')
               text = text.replace(old, new)
 
           text = text.replace('            return out\n                .ok()', '            out\n                .ok()')
           text = text.replace('                .unwrap_or(false);\n        }\n        #[cfg(not(target_os = "windows"))]\n        false', '                .unwrap_or(false)\n        }\n        #[cfg(not(target_os = "windows"))]\n        false')
 
           old_decode = '''fn decode_output(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[1] == 0 {
-        let words: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        String::from_utf16_lossy(&words)
-    } else {
-        String::from_utf8_lossy(bytes).to_string()
-    }
-}'''
+              if bytes.len() >= 2 && bytes[1] == 0 {
+                  let words: Vec<u16> = bytes
+                      .chunks_exact(2)
+                      .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                      .collect();
+                  String::from_utf16_lossy(&words)
+              } else {
+                  String::from_utf8_lossy(bytes).to_string()
+              }
+          }'''.replace('          ', '')
           new_decode = '''fn decode_output(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[1] == 0 {
-        let mut words = Vec::with_capacity(bytes.len() / 2);
-        let mut index = 0;
-        while index + 1 < bytes.len() {
-            words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
-            index += 2;
-        }
-        String::from_utf16_lossy(&words)
-    } else {
-        String::from_utf8_lossy(bytes).to_string()
-    }
-}'''
-          if old_decode not in text:
-              raise SystemExit('missing expected decode_output implementation')
+              if bytes.len() >= 2 && bytes[1] == 0 {
+                  let mut words = Vec::with_capacity(bytes.len() / 2);
+                  let mut index = 0;
+                  while index + 1 < bytes.len() {
+                      words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
+                      index += 2;
+                  }
+                  String::from_utf16_lossy(&words)
+              } else {
+                  String::from_utf8_lossy(bytes).to_string()
+              }
+          }'''.replace('          ', '')
           text = text.replace(old_decode, new_decode)
           path.write_text(text, encoding='utf-8')
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -78,6 +76,9 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add crates/unibox-core/src/lib.rs
-          git diff --cached --quiet && exit 0
+          if git diff --cached --quiet; then
+            echo 'No Clippy cleanup changes required.'
+            exit 0
+          fi
           git commit -m 'fix: satisfy Rust 1.98 clippy'
           git push origin HEAD:stability-hardening

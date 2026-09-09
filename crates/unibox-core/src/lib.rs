@@ -145,7 +145,9 @@ impl RuntimeManager {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = script;
-            Err(anyhow!("managed runtime bootstrap is currently implemented for Windows"))
+            Err(anyhow!(
+                "managed runtime bootstrap is currently implemented for Windows"
+            ))
         }
     }
 
@@ -163,7 +165,9 @@ impl RuntimeManager {
             return output_text(output, "failed to start local services");
         }
         #[cfg(not(target_os = "windows"))]
-        Err(anyhow!("managed runtime start is currently implemented for Windows"))
+        Err(anyhow!(
+            "managed runtime start is currently implemented for Windows"
+        ))
     }
 
     pub fn stop(&self) -> Result<String> {
@@ -176,7 +180,9 @@ impl RuntimeManager {
             return output_text(output, "failed to stop local runtime");
         }
         #[cfg(not(target_os = "windows"))]
-        Err(anyhow!("managed runtime stop is currently implemented for Windows"))
+        Err(anyhow!(
+            "managed runtime stop is currently implemented for Windows"
+        ))
     }
 
     pub fn matrix_session(&self) -> Result<MatrixSession> {
@@ -186,7 +192,10 @@ impl RuntimeManager {
 
     pub fn connector_status(&self, connector: &ConnectorDefinition) -> ConnectorStatus {
         let installed = if connector.adapter == "python-legacy" {
-            self.wsl_ok(&format!("test -f /opt/unibox/connectors/{}/.installed", connector.id))
+            self.wsl_ok(&format!(
+                "test -f /opt/unibox/connectors/{}/.installed",
+                connector.id
+            ))
         } else {
             self.wsl_ok(&format!(
                 "test -x /opt/unibox/connectors/{0}/{1}",
@@ -299,7 +308,11 @@ impl RuntimeManager {
             .context("invalid client HTTP method")?;
         let mut body = input
             .body
-            .map(|value| BASE64.decode(value).context("invalid base64 client HTTP body"))
+            .map(|value| {
+                BASE64
+                    .decode(value)
+                    .context("invalid base64 client HTTP body")
+            })
             .transpose()?;
 
         for _ in 0..6 {
@@ -381,12 +394,7 @@ impl RuntimeManager {
         #[cfg(target_os = "windows")]
         {
             let mut command = Command::new("wsl.exe");
-            command.args([
-                "-d",
-                DISTRO_NAME,
-                "--",
-                "/opt/unibox/bin/unibox-connector",
-            ]);
+            command.args(["-d", DISTRO_NAME, "--", "/opt/unibox/bin/unibox-connector"]);
             command.args(args);
             let output = command
                 .output()
@@ -438,8 +446,7 @@ impl RuntimeManager {
                 .ok()
                 .map(|o| {
                     decode_output(&o.stdout).lines().any(|line| {
-                        line.contains(DISTRO_NAME)
-                            && line.to_ascii_lowercase().contains("running")
+                        line.contains(DISTRO_NAME) && line.to_ascii_lowercase().contains("running")
                     })
                 })
                 .unwrap_or(false);
@@ -469,7 +476,9 @@ impl RuntimeManager {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = shell;
-            Err(anyhow!("managed runtime is currently implemented for Windows"))
+            Err(anyhow!(
+                "managed runtime is currently implemented for Windows"
+            ))
         }
     }
 

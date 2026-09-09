@@ -24,11 +24,14 @@ jobs:
           path = Path('crates/unibox-core/src/lib.rs')
           text = path.read_text(encoding='utf-8')
 
-          needle = 'host.parse::<IpAddr>()'
-          count = text.count(needle)
-          if count != 2:
-              raise SystemExit(f'expected 2 host IP parse sites, found {count}')
-          text = text.replace(needle, 'parse_host_ip(host)')
+          direct = 'host.parse::<IpAddr>().is_ok()'
+          mapped = 'host.parse::<IpAddr>()'
+          if text.count(direct) != 1:
+              raise SystemExit(f'expected one direct host parse, found {text.count(direct)}')
+          text = text.replace(direct, 'parse_host_ip(host).is_some()', 1)
+          if text.count(mapped) != 1:
+              raise SystemExit(f'expected one mapped host parse, found {text.count(mapped)}')
+          text = text.replace(mapped, 'parse_host_ip(host)', 1)
 
           marker = 'fn is_private_ip(ip: IpAddr) -> bool {'
           if marker not in text:
@@ -50,6 +53,8 @@ jobs:
               raise SystemExit('missing IPv6 test list marker')
           text = text.replace(old_tests, new_tests, 1)
 
+          if 'parse_host_ip(host).is_some()' not in text:
+              raise SystemExit('direct-IP normalization failed')
           if text.count('parse_host_ip(host)') != 2:
               raise SystemExit('unexpected normalized host parse count')
           if 'fn parse_host_ip(host: &str) -> Option<IpAddr>' not in text:

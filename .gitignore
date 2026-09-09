@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode/
+.idea/
+*.pfx
+*.p12
+*.key
+*.pem
+runtime-data/

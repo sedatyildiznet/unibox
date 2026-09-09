@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "connectors": {
+    "whatsapp": {"name":"WhatsApp","engine":"mautrix","channel":"candidate","multiAccount":true,"auth":["qr","pairing_code"]},
+    "telegram": {"name":"Telegram","engine":"mautrix","channel":"candidate","multiAccount":true,"auth":["qr","phone_code","2fa"]},
+    "signal": {"name":"Signal","engine":"mautrix","channel":"candidate","multiAccount":true},
+    "discord": {"name":"Discord","engine":"mautrix","channel":"beta","multiAccount":true},
+    "instagram": {"name":"Instagram","engine":"mautrix","channel":"beta","multiAccount":true},
+    "messenger": {"name":"Facebook Messenger","engine":"mautrix","channel":"beta","multiAccount":true},
+    "gmessages": {"name":"Google Messages","engine":"mautrix","channel":"beta","multiAccount":true},
+    "googlechat": {"name":"Google Chat","engine":"mautrix","channel":"beta","multiAccount":true},
+    "slack": {"name":"Slack","engine":"mautrix","channel":"beta","multiAccount":true},
+    "twitter": {"name":"X / Twitter","engine":"mautrix","channel":"experimental","multiAccount":true},
+    "bluesky": {"name":"Bluesky","engine":"mautrix","channel":"experimental","multiAccount":true},
+    "linkedin": {"name":"LinkedIn","engine":"mautrix","channel":"experimental","multiAccount":true},
+    "gvoice": {"name":"Google Voice","engine":"mautrix","channel":"experimental","multiAccount":true},
+    "zulip": {"name":"Zulip","engine":"mautrix","channel":"experimental","multiAccount":true},
+    "irc": {"name":"IRC","engine":"mautrix","channel":"experimental","multiAccount":true}
+  }
+}

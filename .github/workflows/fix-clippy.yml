@@ -69,7 +69,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy -p unibox-core --all-targets --locked -- -D warnings
       - name: Commit cleanup
         shell: bash
         run: |

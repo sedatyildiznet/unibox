@@ -1,3 +1,140 @@
+use serde_json::Value;
+use tauri::{AppHandle, Manager, State};
+use unibox_core::{
+    parse_registry, ClientHttpRequest, ClientHttpResponse, ConnectorDefinition, ConnectorStatus,
+    MatrixSession, RuntimeManager, RuntimeStatus,
+};
+
+const REGISTRY_RAW: &str = include_str!("../../../../registry/stable.json");
+
+struct AppState {
+    runtime: RuntimeManager,
+    registry: Vec<ConnectorDefinition>,
+}
+
+impl AppState {
+    fn connector(&self, id: &str) -> Result<ConnectorDefinition, String> {
+        self.registry
+            .iter()
+            .find(|connector| connector.id == id)
+            .cloned()
+            .ok_or_else(|| format!("unknown connector: {id}"))
+    }
+}
+
+#[tauri::command]
+fn connector_registry(state: State<'_, AppState>) -> Vec<ConnectorDefinition> {
+    state.registry.clone()
+}
+
+#[tauri::command]
+async fn runtime_status(state: State<'_, AppState>) -> RuntimeStatus {
+    state.runtime.status().await
+}
+
+#[tauri::command]
+fn bootstrap_runtime(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    let script = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?
+        .join("resources")
+        .join("runtime")
+        .join("bootstrap.ps1");
+    state
+        .runtime
+        .bootstrap(&script)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn start_runtime(state: State<'_, AppState>) -> Result<String, String> {
+    state.runtime.start().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn stop_runtime(state: State<'_, AppState>) -> Result<String, String> {
+    state.runtime.stop().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn matrix_session(state: State<'_, AppState>) -> Result<MatrixSession, String> {
+    state
+        .runtime
+        .matrix_session()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn connector_status(id: String, state: State<'_, AppState>) -> Result<ConnectorStatus, String> {
+    let connector = state.connector(&id)?;
+    Ok(state.runtime.connector_status(&connector))
+}
+
+#[tauri::command]
+fn connector_install(id: String, state: State<'_, AppState>) -> Result<String, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .install_connector(&connector)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn connector_start(id: String, state: State<'_, AppState>) -> Result<String, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .start_connector(&connector)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn connector_stop(id: String, state: State<'_, AppState>) -> Result<String, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .stop_connector(&connector)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn connector_update(id: String, state: State<'_, AppState>) -> Result<String, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .update_connector(&connector)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn connector_provision(
+    id: String,
+    method: String,
+    path: String,
+    body: Option<Value>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .provision_request(&connector, &method, &path, body)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn connector_client_http(
+    request: ClientHttpRequest,
+    state: State<'_, AppState>,
+) -> Result<ClientHttpResponse, String> {
+    state
+        .runtime
+        .client_http(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -5,6 +142,28 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let data_root = app.path().app_local_data_dir()?.join("runtime");
+            let runtime = RuntimeManager::new(data_root)?;
+            let registry = parse_registry(REGISTRY_RAW)?;
+            app.manage(AppState { runtime, registry });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            connector_registry,
+            runtime_status,
+            bootstrap_runtime,
+            start_runtime,
+            stop_runtime,
+            matrix_session,
+            connector_status,
+            connector_install,
+            connector_start,
+            connector_stop,
+            connector_update,
+            connector_provision,
+            connector_client_http
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Unibox");
 }

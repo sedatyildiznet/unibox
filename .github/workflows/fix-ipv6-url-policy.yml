@@ -1,0 +1,87 @@
+name: Apply IPv6 URL policy fix
+
+on:
+  push:
+    branches:
+      - stability-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: normalize bracketed IPv6 connector hosts') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stability-hardening
+      - name: Patch bracketed IPv6 host handling
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/unibox-core/src/lib.rs')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    if host.parse::<IpAddr>().is_ok() {
+              return Ok(());
+          }
+
+          let port = url.port_or_known_default().unwrap_or(443);'''.replace('      ', '')
+          new = '''    if parse_host_ip(host).is_some() {
+              return Ok(());
+          }
+
+          let port = url.port_or_known_default().unwrap_or(443);'''.replace('      ', '')
+          if old not in text:
+              raise SystemExit('missing ensure_public_remote_url host parse block')
+          text = text.replace(old, new, 1)
+
+          old = '''    host.parse::<IpAddr>()
+              .map(|ip| !is_private_ip(ip))
+              .unwrap_or(true)
+          }
+
+          fn is_private_ip(ip: IpAddr) -> bool {'''.replace('      ', '')
+          new = '''    parse_host_ip(host)
+              .map(|ip| !is_private_ip(ip))
+              .unwrap_or(true)
+          }
+
+          fn parse_host_ip(host: &str) -> Option<IpAddr> {
+              let normalized = host
+                  .strip_prefix('[')
+                  .and_then(|value| value.strip_suffix(']'))
+                  .unwrap_or(host);
+              normalized.parse::<IpAddr>().ok()
+          }
+
+          fn is_private_ip(ip: IpAddr) -> bool {'''.replace('      ', '')
+          if old not in text:
+              raise SystemExit('missing is_allowed_remote_url host parse block')
+          text = text.replace(old, new, 1)
+
+          text = text.replace(
+              '            "https://[::1]/test",\n            "https://[fc00::1]/test",',
+              '            "https://[::1]/test",\n            "https://[::]/test",\n            "https://[fc00::1]/test",\n            "https://[fe80::1]/test",',
+              1,
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - run: cargo test -p unibox-core --locked
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/unibox-core/src/lib.rs
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: normalize bracketed IPv6 connector hosts'
+          git push origin HEAD:stability-hardening

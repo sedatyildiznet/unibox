@@ -60,11 +60,16 @@ function serviceName(room: Room): string {
 }
 
 function isDirectRoom(client: MatrixClient, roomId: string): boolean {
-  const event = client.getAccountData('m.direct');
+  // Some matrix-js-sdk releases omit m.direct from AccountDataEvents typing even though
+  // m.direct is standard Matrix account data. Keep this narrow compatibility cast local.
+  const getAccountData = client.getAccountData.bind(client) as unknown as (
+    eventType: string,
+  ) => MatrixEvent | undefined;
+  const event = getAccountData('m.direct');
   const content = event?.getContent() as Record<string, unknown> | undefined;
   if (!content) return false;
-  return Object.values(content).some(value =>
-    Array.isArray(value) && value.some(candidate => candidate === roomId),
+  return Object.values(content).some(
+    value => Array.isArray(value) && value.some(candidate => candidate === roomId),
   );
 }
 

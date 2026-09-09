@@ -12,6 +12,7 @@ use std::{
 
 pub const DISTRO_NAME: &str = "UniboxRuntime";
 pub const MATRIX_URL: &str = "http://127.0.0.1:8008";
+pub const SYNAPSE_SERVICE: &str = "unibox-synapse";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatrixSession {
@@ -101,13 +102,7 @@ impl RuntimeManager {
             provision_http: Client::builder().timeout(Duration::from_secs(70)).build()?,
             remote_http: Client::builder()
                 .timeout(Duration::from_secs(70))
-                .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                    if is_allowed_remote_url(attempt.url()) {
-                        attempt.follow()
-                    } else {
-                        attempt.stop()
-                    }
-                }))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()?,
         })
     }
@@ -157,15 +152,12 @@ impl RuntimeManager {
     pub fn start(&self) -> Result<String> {
         #[cfg(target_os = "windows")]
         {
+            let shell = format!(
+                "systemctl start postgresql {0} && systemctl is-active postgresql {0}",
+                SYNAPSE_SERVICE
+            );
             let output = Command::new("wsl.exe")
-                .args([
-                    "-d",
-                    DISTRO_NAME,
-                    "--",
-                    "bash",
-                    "-lc",
-                    "systemctl start postgresql matrix-synapse && systemctl is-active postgresql matrix-synapse",
-                ])
+                .args(["-d", DISTRO_NAME, "--", "bash", "-lc", &shell])
                 .output()
                 .context("failed to start UniboxRuntime")?;
             return output_text(output, "failed to start local services");
@@ -302,61 +294,87 @@ impl RuntimeManager {
     }
 
     pub async fn client_http(&self, input: ClientHttpRequest) -> Result<ClientHttpResponse> {
-        let url = Url::parse(&input.url).context("invalid connector client HTTP URL")?;
-        if !is_allowed_remote_url(&url) {
-            return Err(anyhow!(
-                "connector client HTTP only permits public HTTPS URLs"
-            ));
-        }
-        let method = reqwest::Method::from_bytes(input.method.as_bytes())
+        let mut url = Url::parse(&input.url).context("invalid connector client HTTP URL")?;
+        let mut method = reqwest::Method::from_bytes(input.method.as_bytes())
             .context("invalid client HTTP method")?;
-        let mut request = self.remote_http.request(method, url);
-        for (name, values) in input.headers {
-            if matches!(
-                name.to_ascii_lowercase().as_str(),
-                "host" | "content-length" | "connection"
-            ) {
+        let mut body = input
+            .body
+            .map(|value| BASE64.decode(value).context("invalid base64 client HTTP body"))
+            .transpose()?;
+
+        for _ in 0..6 {
+            ensure_public_remote_url(&url).await?;
+
+            let mut request = self.remote_http.request(method.clone(), url.clone());
+            for (name, values) in &input.headers {
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "host" | "content-length" | "connection"
+                ) {
+                    continue;
+                }
+                let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .context("invalid client HTTP header")?;
+                for value in values {
+                    request = request.header(header_name.clone(), value.as_str());
+                }
+            }
+            if let Some(bytes) = &body {
+                request = request.body(bytes.clone());
+            }
+
+            let response = self
+                .remote_http
+                .execute(request.build()?)
+                .await
+                .context("connector client HTTP request failed")?;
+            let status = response.status();
+
+            if status.is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| anyhow!("redirect response is missing Location header"))?
+                    .to_str()
+                    .context("invalid redirect Location header")?;
+                let next = url.join(location).context("invalid redirect URL")?;
+                ensure_public_remote_url(&next).await?;
+
+                if matches!(status.as_u16(), 301 | 302 | 303)
+                    && method != reqwest::Method::GET
+                    && method != reqwest::Method::HEAD
+                {
+                    method = reqwest::Method::GET;
+                    body = None;
+                }
+                url = next;
                 continue;
             }
-            let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                .context("invalid client HTTP header")?;
-            for value in values {
-                request = request.header(header_name.clone(), value);
+
+            let status_code = status.as_u16();
+            let final_url = response.url().to_string();
+            let mut headers: HashMap<String, Vec<String>> = HashMap::new();
+            for (name, value) in response.headers() {
+                if let Ok(value) = value.to_str() {
+                    headers
+                        .entry(name.as_str().to_string())
+                        .or_default()
+                        .push(value.to_string());
+                }
             }
+            let bytes = response
+                .bytes()
+                .await
+                .context("failed to read client HTTP response")?;
+            return Ok(ClientHttpResponse {
+                status_code,
+                final_url,
+                headers,
+                body: BASE64.encode(bytes),
+            });
         }
-        if let Some(body) = input.body {
-            request = request.body(
-                BASE64
-                    .decode(body)
-                    .context("invalid base64 client HTTP body")?,
-            );
-        }
-        let response = self
-            .remote_http
-            .execute(request.build()?)
-            .await
-            .context("connector client HTTP request failed")?;
-        let status_code = response.status().as_u16();
-        let final_url = response.url().to_string();
-        let mut headers: HashMap<String, Vec<String>> = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(value) = value.to_str() {
-                headers
-                    .entry(name.as_str().to_string())
-                    .or_default()
-                    .push(value.to_string());
-            }
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .context("failed to read client HTTP response")?;
-        Ok(ClientHttpResponse {
-            status_code,
-            final_url,
-            headers,
-            body: BASE64.encode(bytes),
-        })
+
+        Err(anyhow!("connector client HTTP exceeded redirect limit"))
     }
 
     fn connector_command(&self, args: &[&str]) -> Result<String> {
@@ -464,6 +482,36 @@ pub fn parse_registry(raw: &str) -> Result<Vec<ConnectorDefinition>> {
     serde_json::from_str(raw).context("invalid connector registry")
 }
 
+async fn ensure_public_remote_url(url: &Url) -> Result<()> {
+    if !is_allowed_remote_url(url) {
+        return Err(anyhow!(
+            "connector client HTTP only permits public HTTPS URLs"
+        ));
+    }
+
+    let Some(host) = url.host_str() else {
+        return Err(anyhow!("connector client HTTP URL is missing a host"));
+    };
+    if host.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+
+    let port = url.port_or_known_default().unwrap_or(443);
+    let resolved: Vec<_> = tokio::net::lookup_host((host, port))
+        .await
+        .with_context(|| format!("failed to resolve connector HTTP host {host}"))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(anyhow!("connector HTTP host did not resolve"));
+    }
+    if resolved.iter().any(|address| is_private_ip(address.ip())) {
+        return Err(anyhow!(
+            "connector client HTTP host resolves to a private or local address"
+        ));
+    }
+    Ok(())
+}
+
 fn is_allowed_remote_url(url: &Url) -> bool {
     if url.scheme() != "https" {
         return false;
@@ -512,5 +560,55 @@ fn decode_output(bytes: &[u8]) -> String {
         String::from_utf16_lossy(&words)
     } else {
         String::from_utf8_lossy(bytes).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_url_policy_blocks_local_targets() {
+        for value in [
+            "http://example.com",
+            "https://localhost/test",
+            "https://service.local/test",
+            "https://127.0.0.1/test",
+            "https://10.0.0.1/test",
+            "https://169.254.1.1/test",
+            "https://[::1]/test",
+            "https://[fc00::1]/test",
+        ] {
+            let url = Url::parse(value).unwrap();
+            assert!(!is_allowed_remote_url(&url), "should block {value}");
+        }
+    }
+
+    #[test]
+    fn remote_url_policy_allows_public_https_targets() {
+        for value in ["https://example.com", "https://8.8.8.8/dns-query"] {
+            let url = Url::parse(value).unwrap();
+            assert!(is_allowed_remote_url(&url), "should allow {value}");
+        }
+    }
+
+    #[test]
+    fn registry_parser_rejects_invalid_json() {
+        assert!(parse_registry("not json").is_err());
+    }
+
+    #[test]
+    fn utf16_output_decoder_handles_wsl_listing() {
+        let text = "UniboxRuntime\r\n";
+        let bytes: Vec<u8> = text
+            .encode_utf16()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        assert_eq!(decode_output(&bytes), text);
+    }
+
+    #[test]
+    fn synapse_service_name_matches_managed_runtime() {
+        assert_eq!(SYNAPSE_SERVICE, "unibox-synapse");
     }
 }

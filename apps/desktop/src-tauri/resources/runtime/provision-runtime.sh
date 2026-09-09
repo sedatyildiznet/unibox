@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -f /var/lib/unibox-maintenance/pending.json ]; then
+  /opt/unibox/synapse-venv/bin/python /opt/unibox/bin/unibox-maintenance.py recover
+fi
+
 exec 9>/var/lock/unibox-maintenance.lock
 flock -n 9 || { printf 'Another local maintenance operation is running.\n' >&2; exit 1; }
 

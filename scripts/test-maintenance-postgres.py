@@ -12,7 +12,7 @@ original_run = m.run
 def ci_run(*args, **kwargs):
     if args[:4] == ('runuser', '-u', 'postgres', '--'):
         args = args[4:]
-    if args[0] == 'chown':
+    if args[0] in {'chown', 'systemctl'}:
         return ''  # CI has no application OS account; PostgreSQL roles are real.
     return original_run(*args, **kwargs)
 
@@ -29,6 +29,7 @@ try:
         (source / 'session').write_text('original-session')
         stage = root / 'snapshot'
         stage.mkdir()
+        m.RECOVERY_ROOT = root / 'recovery'
         sources = {'data': source}
         m.collect(stage, sources, [DB])
         archive = root / 'snapshot.uniboxbackup'
@@ -52,6 +53,19 @@ try:
                 assert 'previous local data was recovered' in str(error)
         assert ci_run('psql', '-At', '-d', DB, '-c', 'SELECT body FROM messages') == 'latest'
         assert (source / 'session').read_text() == 'latest-session'
+        # Simulate a process stopping after the pre-restore journal is durable.
+        pending = m.RECOVERY_ROOT / 'snapshot'
+        pending.mkdir(parents=True)
+        m.collect(pending, sources, [DB])
+        m.journal_write({'schema': 1, 'roots': ['data'], 'databases': [DB], 'services': []})
+        ci_run('psql', '-v', 'ON_ERROR_STOP=1', '-d', DB, '-c', "UPDATE messages SET body='interrupted';")
+        (source / 'session').write_text('interrupted-session')
+        original_apply = m.apply
+        with patch.object(m, 'apply', side_effect=lambda candidate, ignored, dbs: original_apply(candidate, sources, dbs)), patch.object(m, 'resume'):
+            m.recover_pending()
+        assert ci_run('psql', '-At', '-d', DB, '-c', 'SELECT body FROM messages') == 'latest'
+        assert (source / 'session').read_text() == 'latest-session'
+        assert not (m.RECOVERY_ROOT / 'pending.json').exists()
     print('Real PostgreSQL backup, restore and recovery checks passed.')
 finally:
     ci_run('dropdb', '--if-exists', DB)

@@ -272,7 +272,7 @@ impl RuntimeManager {
         #[cfg(target_os = "windows")]
         {
             let shell = format!(
-                "systemctl start postgresql {0} && systemctl is-active --quiet postgresql {0} && for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null && exit 0; sleep 1; done; exit 1",
+                "if [ -f /var/lib/unibox-maintenance/pending.json ]; then /opt/unibox/synapse-venv/bin/python /opt/unibox/bin/unibox-maintenance.py recover || exit 1; fi; systemctl start postgresql {0} && systemctl is-active --quiet postgresql {0} && for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null && exit 0; sleep 1; done; exit 1",
                 SYNAPSE_SERVICE
             );
             let output = windows_command("wsl.exe")

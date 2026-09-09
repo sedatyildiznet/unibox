@@ -81,10 +81,36 @@ class ArchiveTests(unittest.TestCase):
                 applications.append(candidate.name)
                 if candidate.name == 'incoming':
                     raise RuntimeError('Simulated restore failure')
-            with patch.object(module, 'services', return_value=[]), patch.object(module, 'collect'), patch.object(module, 'resume'), patch.object(module, 'apply', side_effect=apply):
+            with patch.object(module, 'RECOVERY_ROOT', root / 'recovery'), patch.object(module, 'services', return_value=[]), patch.object(module, 'collect'), patch.object(module, 'resume'), patch.object(module, 'apply', side_effect=apply):
                 with self.assertRaisesRegex(RuntimeError, 'previous local data was recovered'):
                     module.restore(output, {}, {}, [])
-            self.assertEqual(applications, ['incoming', 'rollback'])
+            self.assertEqual(applications, ['incoming', 'snapshot'])
+
+    def test_pending_recovery_retains_snapshot_until_healthy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(module, 'RECOVERY_ROOT', root):
+                (root / 'snapshot').mkdir()
+                module.journal_write({'schema': 1, 'roots': ['data'], 'databases': ['synapse'], 'services': []})
+                with patch.object(module, 'run'), patch.object(module, 'apply'), patch.object(module, 'resume', side_effect=RuntimeError('offline')):
+                    with self.assertRaises(RuntimeError):
+                        module.recover_pending()
+                self.assertTrue((root / 'pending.json').exists())
+                self.assertTrue((root / 'snapshot').exists())
+                with patch.object(module, 'run'), patch.object(module, 'apply') as apply, patch.object(module, 'resume'):
+                    module.recover_pending()
+                    apply.assert_called_once_with(root / 'snapshot', {'data': Path('/var/lib/unibox')}, ['synapse'])
+                self.assertFalse((root / 'pending.json').exists())
+                self.assertFalse((root / 'snapshot').exists())
+
+    def test_recovery_recreates_directory_removed_before_interruption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / 'snapshot/data').mkdir(parents=True)
+            (root / 'snapshot/data/session').write_text('original session')
+            with patch.object(module, 'run'):
+                module.apply(root / 'snapshot', {'data': root / 'missing'}, [])
+            self.assertEqual((root / 'missing/session').read_text(), 'original session')
 
 
 unittest.main()

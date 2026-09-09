@@ -28,7 +28,7 @@ Unit tests and build checks do not establish external-provider compatibility. Wi
 - Provider-specific capability discovery and account rename/reconnect/logout management.
 - Full legacy Discord/Google Chat login acceptance and per-provider maturity review.
 - Database-aware connector rollback; current binary/venv rollback cannot reverse schema migrations.
-- Windows acceptance of backup/restore, durable recovery after forced machine shutdown, optional encryption and desktop-preference backup.
+- Windows acceptance of backup/restore, forced-shutdown recovery acceptance, optional encryption and desktop-preference backup.
 - Installed-Windows acceptance of tray/startup behavior, comprehensive diagnostics and cache controls.
 - Global indexed message search, media preview, voice notes, threads, stickers and polls.
 - Signed updater keys/public key configuration and an actual signed upgrade acceptance test.

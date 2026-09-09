@@ -133,10 +133,11 @@ export function App() {
     void backend.registry().then(setRegistry).catch(error => setRuntimeError(errorText(error)));
     if (!startupChecked.current) {
       startupChecked.current = true;
-      void refreshRuntime().then(async status => {
+      void backend.status().then(async status => {
+        setRuntime({ ...status, synapse_ready: false, matrix_session_ready: false });
         setBootstrap(status.bootstrap ?? null);
-        if (status.platform === 'windows' && (!status.synapse_ready || !status.matrix_session_ready)) {
-          if (status.distro_installed && status.matrix_session_ready && (!status.bootstrap || status.bootstrap.state === 'RUNTIME_READY')) {
+        if (status.platform === 'windows') {
+          if (status.distro_installed && (!status.bootstrap || status.bootstrap.state === 'RUNTIME_READY')) {
             setRuntimeBusy(true);
             try { await backend.startRuntime(); await refreshRuntime(); }
             finally { setRuntimeBusy(false); }

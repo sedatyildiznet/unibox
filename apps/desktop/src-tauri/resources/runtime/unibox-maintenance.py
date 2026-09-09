@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 
+RECOVERY_ROOT = Path('/var/lib/unibox-maintenance')
 MAX_FILES = 200000
 MAX_BYTES = 100 * 1024**3
 
@@ -136,6 +137,9 @@ def unpack_archive(source, destination):
 
 
 def apply(stage, sources, dbs):
+    for destination in sources.values():
+        if destination.resolve() != destination:
+            raise RuntimeError('Unexpected symbolic link in recovery data paths.')
     for name in dbs:
         with (stage / 'databases' / f'{name}.dump').open('rb') as dump:
             run('runuser', '-u', 'postgres', '--', 'pg_restore', '--clean', '--if-exists', '--single-transaction', '--no-owner', '--role=unibox', '--dbname', name, source=dump)
@@ -144,7 +148,8 @@ def apply(stage, sources, dbs):
         if not incoming.is_dir():
             raise RuntimeError('Required backup data is missing.')
         # Existing files are recoverable from the independent rollback snapshot.
-        shutil.rmtree(destination)
+        if destination.exists():
+            shutil.rmtree(destination)
         shutil.copytree(incoming, destination)
         run('chown', '-R', 'root:unibox' if name == 'config' else 'unibox:unibox', str(destination))
         os.chmod(destination, 0o750)
@@ -153,6 +158,73 @@ def apply(stage, sources, dbs):
         path = Path('/etc/unibox') / name
         if path.exists():
             os.chmod(path, 0o600)
+    for destination in sources.values():
+        sync_tree(destination)
+
+
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def sync_tree(root):
+    for item in root.rglob('*'):
+        if item.is_file():
+            with item.open('rb') as source:
+                os.fsync(source.fileno())
+    for item in sorted((path for path in root.rglob('*') if path.is_dir()), reverse=True):
+        sync_directory(item)
+    sync_directory(root)
+
+
+def journal_write(value):
+    RECOVERY_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = RECOVERY_ROOT / 'pending.tmp'
+    with temporary.open('w') as target:
+        json.dump(value, target)
+        target.flush()
+        os.fsync(target.fileno())
+    os.replace(temporary, RECOVERY_ROOT / 'pending.json')
+    sync_directory(RECOVERY_ROOT)
+
+
+def clear_journal():
+    (RECOVERY_ROOT / 'pending.json').unlink(missing_ok=True)
+    sync_directory(RECOVERY_ROOT)
+    shutil.rmtree(RECOVERY_ROOT / 'snapshot', ignore_errors=True)
+
+
+def recover_pending():
+    journal = RECOVERY_ROOT / 'pending.json'
+    if not journal.exists():
+        return
+    value = json.loads(journal.read_text())
+    if value.get('schema') != 1:
+        raise RuntimeError('Unsupported recovery journal. Keep the recovery snapshot.')
+    sources = {}
+    for name in value['roots']:
+        if name == 'config':
+            sources[name] = Path('/etc/unibox')
+        elif name == 'data':
+            sources[name] = Path('/var/lib/unibox')
+        elif re.fullmatch(r'connectors/[a-z0-9_-]+/state', name):
+            sources[name] = Path('/opt/unibox') / name
+        else:
+            raise RuntimeError('Invalid recovery data root.')
+    dbs, active = value['databases'], value['services']
+    if any(name != 'synapse' and not re.fullmatch(r'unibox_[a-z0-9_]+', name) for name in dbs):
+        raise RuntimeError('Invalid recovery database.')
+    if any(not re.fullmatch(r'unibox-[a-z0-9_-]+\.service', name) for name in active):
+        raise RuntimeError('Invalid recovery service.')
+    if active:
+        run('systemctl', 'stop', *active)
+    run('systemctl', 'start', 'postgresql')
+    apply(RECOVERY_ROOT / 'snapshot', sources, dbs)
+    resume(active)
+    clear_journal()
 
 
 def restore(source, sources, versions, dbs):
@@ -177,25 +249,40 @@ def restore(source, sources, versions, dbs):
         except Exception:
             resume(active)
             raise
+        RECOVERY_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(RECOVERY_ROOT, 0o700)
+        if (RECOVERY_ROOT / 'pending.json').exists():
+            raise RuntimeError('An earlier recovery must finish before restoring again.')
+        shutil.rmtree(RECOVERY_ROOT / 'snapshot', ignore_errors=True)
+        try:
+            shutil.move(str(rollback), RECOVERY_ROOT / 'snapshot')
+            sync_tree(RECOVERY_ROOT / 'snapshot')
+            journal_write({'schema': 1, 'roots': sorted(sources), 'databases': dbs, 'services': active})
+        except Exception:
+            resume(active)
+            raise
         try:
             apply(stage, sources, dbs)
             resume(active)
         except Exception as error:
-            # Stop partially recovered writers before restoring the previous databases.
             if active:
                 run('systemctl', 'stop', *active)
             try:
-                apply(rollback, sources, dbs)
+                apply(RECOVERY_ROOT / 'snapshot', sources, dbs)
                 resume(active)
             except Exception:
-                recovery = Path('/var/tmp') / ('unibox-recovery-' + os.urandom(8).hex())
-                rollback.rename(recovery)
-                os.chmod(recovery, 0o700)
-                raise RuntimeError('Automatic recovery failed. A private recovery snapshot was retained in /var/tmp.') from None
+                raise RuntimeError('Automatic recovery failed. The private recovery journal and snapshot were retained.') from None
+            clear_journal()
             raise RuntimeError('Restore failed. The previous local data was recovered.') from error
+        clear_journal()
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == 'recover':
+        with open('/var/lock/unibox-maintenance.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            recover_pending()
+        return
     if len(sys.argv) != 3 or sys.argv[1] not in {'backup', 'restore'}:
         raise RuntimeError('Expected backup or restore and a file path.')
     os.umask(0o077)
@@ -204,6 +291,7 @@ def main():
         raise RuntimeError('Choose a .uniboxbackup file.')
     with open('/var/lock/unibox-maintenance.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        recover_pending()
         source_roots, versions, dbs = roots(), fingerprint(), databases()
         if sys.argv[1] == 'restore':
             restore(path, source_roots, versions, dbs)

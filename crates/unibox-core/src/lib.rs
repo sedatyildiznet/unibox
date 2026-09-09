@@ -499,7 +499,7 @@ async fn ensure_public_remote_url(url: &Url) -> Result<()> {
     let Some(host) = url.host_str() else {
         return Err(anyhow!("connector client HTTP URL is missing a host"));
     };
-    if host.parse::<IpAddr>().is_ok() {
+    if parse_host_ip(host).is_some() {
         return Ok(());
     }
 
@@ -529,9 +529,17 @@ fn is_allowed_remote_url(url: &Url) -> bool {
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
         return false;
     }
-    host.parse::<IpAddr>()
+    parse_host_ip(host)
         .map(|ip| !is_private_ip(ip))
         .unwrap_or(true)
+}
+
+fn parse_host_ip(host: &str) -> Option<IpAddr> {
+    let normalized = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    normalized.parse::<IpAddr>().ok()
 }
 
 fn is_private_ip(ip: IpAddr) -> bool {
@@ -586,7 +594,9 @@ mod tests {
             "https://10.0.0.1/test",
             "https://169.254.1.1/test",
             "https://[::1]/test",
+            "https://[::]/test",
             "https://[fc00::1]/test",
+            "https://[fe80::1]/test",
         ] {
             let url = Url::parse(value).unwrap();
             assert!(!is_allowed_remote_url(&url), "should block {value}");

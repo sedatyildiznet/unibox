@@ -12,7 +12,7 @@ TAURI = (ROOT / 'apps/desktop/src-tauri/tauri.conf.json').read_text(encoding='ut
 checks = {
     'core uses managed Synapse service name': 'pub const SYNAPSE_SERVICE: &str = "unibox-synapse";' in CORE,
     'core does not start distro package service': 'systemctl start postgresql matrix-synapse' not in CORE,
-    'bootstrap imports WSL2 runtime': '--version 2' in BOOTSTRAP,
+    'bootstrap imports WSL2 runtime': "'--version', '2'" in BOOTSTRAP,
     'bootstrap verifies SHA-256': 'Get-FileHash -Algorithm SHA256' in BOOTSTRAP,
     'bootstrap starts managed Synapse service': 'postgresql unibox-synapse' in BOOTSTRAP,
     'bootstrap can request WSL installation': "--install', '--no-distribution'" in BOOTSTRAP,

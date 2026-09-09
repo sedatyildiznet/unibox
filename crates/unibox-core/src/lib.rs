@@ -2,13 +2,22 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::process::{Command, Output};
 use std::{
     collections::HashMap,
     net::IpAddr,
     path::{Path, PathBuf},
-    process::{Command, Output},
     time::Duration,
 };
+
+#[cfg(target_os = "windows")]
+fn windows_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(program);
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW; elevation remains visible.
+    command
+}
 
 pub const DISTRO_NAME: &str = "UniboxRuntime";
 pub const MATRIX_URL: &str = "http://127.0.0.1:8008";
@@ -115,7 +124,6 @@ pub struct RuntimeManager {
     data_root: PathBuf,
     http: Client,
     provision_http: Client,
-    remote_http: Client,
 }
 
 impl RuntimeManager {
@@ -127,10 +135,6 @@ impl RuntimeManager {
             data_root,
             http: Client::builder().timeout(Duration::from_secs(3)).build()?,
             provision_http: Client::builder().timeout(Duration::from_secs(70)).build()?,
-            remote_http: Client::builder()
-                .timeout(Duration::from_secs(70))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
         })
     }
 
@@ -162,7 +166,7 @@ impl RuntimeManager {
     pub fn bootstrap(&self, script: &Path) -> Result<BootstrapResult> {
         #[cfg(target_os = "windows")]
         {
-            let output = Command::new("powershell.exe")
+            let output = windows_command("powershell.exe")
                 .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
                 .arg(script)
                 .arg("-DataRoot")
@@ -196,7 +200,7 @@ impl RuntimeManager {
             if !matches!(state.state, BootstrapState::RebootRequired) {
                 return Err(anyhow!("A Windows restart is not required by setup."));
             }
-            let output = Command::new("shutdown.exe")
+            let output = windows_command("shutdown.exe")
                 .args(["/r", "/t", "0"])
                 .output()
                 .context("Windows could not restart. Please restart from the Start menu.")?;
@@ -218,7 +222,7 @@ impl RuntimeManager {
                 "systemctl start postgresql {0} && systemctl is-active postgresql {0}",
                 SYNAPSE_SERVICE
             );
-            let output = Command::new("wsl.exe")
+            let output = windows_command("wsl.exe")
                 .args(["-d", DISTRO_NAME, "--", "bash", "-lc", &shell])
                 .output()
                 .context("failed to start UniboxRuntime")?;
@@ -233,7 +237,7 @@ impl RuntimeManager {
     pub fn stop(&self) -> Result<String> {
         #[cfg(target_os = "windows")]
         {
-            let output = Command::new("wsl.exe")
+            let output = windows_command("wsl.exe")
                 .args(["--terminate", DISTRO_NAME])
                 .output()
                 .context("failed to terminate UniboxRuntime")?;
@@ -376,11 +380,26 @@ impl RuntimeManager {
             })
             .transpose()?;
 
+        let original_origin = url.origin();
         for _ in 0..6 {
-            ensure_public_remote_url(&url).await?;
-
-            let mut request = self.remote_http.request(method.clone(), url.clone());
+            let addresses = ensure_public_remote_url(&url).await?;
+            // Pin the validated DNS result for the actual connection. A second DNS lookup
+            // would let an attacker switch a public address to loopback after validation.
+            let host = url
+                .host_str()
+                .ok_or_else(|| anyhow!("Missing remote host"))?;
+            let client = Client::builder()
+                .timeout(Duration::from_secs(70))
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .resolve_to_addrs(host, &addresses)
+                .build()?;
+            let mut request = client.request(method.clone(), url.clone());
             for (name, values) in &input.headers {
+                if url.origin() != original_origin {
+                    // Connector-supplied headers may contain secrets under arbitrary names.
+                    continue;
+                }
                 if matches!(
                     name.to_ascii_lowercase().as_str(),
                     "host" | "content-length" | "connection"
@@ -397,8 +416,7 @@ impl RuntimeManager {
                 request = request.body(bytes.clone());
             }
 
-            let response = self
-                .remote_http
+            let response = client
                 .execute(request.build()?)
                 .await
                 .context("connector client HTTP request failed")?;
@@ -413,6 +431,11 @@ impl RuntimeManager {
                     .context("invalid redirect Location header")?;
                 let next = url.join(location).context("invalid redirect URL")?;
                 ensure_public_remote_url(&next).await?;
+                if next.origin() != url.origin() && body.is_some() {
+                    return Err(anyhow!(
+                        "Cross-origin redirects with authentication bodies are not allowed"
+                    ));
+                }
 
                 if matches!(status.as_u16(), 301..=303)
                     && method != reqwest::Method::GET
@@ -454,7 +477,7 @@ impl RuntimeManager {
     fn connector_command(&self, args: &[&str]) -> Result<String> {
         #[cfg(target_os = "windows")]
         {
-            let mut command = Command::new("wsl.exe");
+            let mut command = windows_command("wsl.exe");
             command.args(["-d", DISTRO_NAME, "--", "/opt/unibox/bin/unibox-connector"]);
             command.args(args);
             let output = command
@@ -473,7 +496,7 @@ impl RuntimeManager {
 
     fn wsl_available(&self) -> bool {
         #[cfg(target_os = "windows")]
-        return Command::new("wsl.exe")
+        return windows_command("wsl.exe")
             .arg("--status")
             .output()
             .map(|o| o.status.success())
@@ -485,7 +508,7 @@ impl RuntimeManager {
     fn distro_installed(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
-            let out = Command::new("wsl.exe").args(["-l", "-q"]).output();
+            let out = windows_command("wsl.exe").args(["-l", "-q"]).output();
             out.ok()
                 .map(|o| {
                     decode_output(&o.stdout)
@@ -501,7 +524,7 @@ impl RuntimeManager {
     fn distro_running(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
-            let out = Command::new("wsl.exe")
+            let out = windows_command("wsl.exe")
                 .args(["--list", "--running", "--quiet"])
                 .output();
             out.ok()
@@ -528,7 +551,7 @@ impl RuntimeManager {
     fn wsl_capture(&self, shell: &str) -> Result<String> {
         #[cfg(target_os = "windows")]
         {
-            let output = Command::new("wsl.exe")
+            let output = windows_command("wsl.exe")
                 .args(["-d", DISTRO_NAME, "--", "bash", "-lc", shell])
                 .output()
                 .context("failed to execute command in UniboxRuntime")?;
@@ -552,7 +575,7 @@ pub fn parse_registry(raw: &str) -> Result<Vec<ConnectorDefinition>> {
     serde_json::from_str(raw).context("invalid connector registry")
 }
 
-async fn ensure_public_remote_url(url: &Url) -> Result<()> {
+async fn ensure_public_remote_url(url: &Url) -> Result<Vec<std::net::SocketAddr>> {
     if !is_allowed_remote_url(url) {
         return Err(anyhow!(
             "connector client HTTP only permits public HTTPS URLs"
@@ -562,11 +585,11 @@ async fn ensure_public_remote_url(url: &Url) -> Result<()> {
     let Some(host) = url.host_str() else {
         return Err(anyhow!("connector client HTTP URL is missing a host"));
     };
-    if parse_host_ip(host).is_some() {
-        return Ok(());
+    let port = url.port_or_known_default().unwrap_or(443);
+    if let Some(ip) = parse_host_ip(host) {
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
     }
 
-    let port = url.port_or_known_default().unwrap_or(443);
     let resolved: Vec<_> = tokio::net::lookup_host((host, port))
         .await
         .with_context(|| format!("failed to resolve connector HTTP host {host}"))?
@@ -579,11 +602,11 @@ async fn ensure_public_remote_url(url: &Url) -> Result<()> {
             "connector client HTTP host resolves to a private or local address"
         ));
     }
-    Ok(())
+    Ok(resolved)
 }
 
 fn is_allowed_remote_url(url: &Url) -> bool {
-    if url.scheme() != "https" {
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
         return false;
     }
     let Some(host) = url.host_str() else {
@@ -608,17 +631,37 @@ fn parse_host_ip(host: &str) -> Option<IpAddr> {
 fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+            let octets = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || octets[0] == 0
+                || octets[0] >= 240
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
         }
         IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_private_ip(IpAddr::V4(mapped));
+            }
             ip.is_loopback()
                 || ip.is_unspecified()
+                || ip.is_multicast()
+                || (ip.segments()[0] & 0xe000) != 0x2000
+                || ip.segments()[0] == 0x2002
+                || (ip.segments()[0] == 0x2001 && ip.segments()[1] == 0)
+                || (ip.segments()[0] == 0x2001 && ip.segments()[1] == 0xdb8)
                 || (ip.segments()[0] & 0xfe00) == 0xfc00
                 || (ip.segments()[0] & 0xffc0) == 0xfe80
         }
     }
 }
 
+#[cfg(target_os = "windows")]
 fn output_text(output: Output, message: &str) -> Result<String> {
     if output.status.success() {
         Ok(decode_output(&output.stdout))
@@ -629,6 +672,7 @@ fn output_text(output: Output, message: &str) -> Result<String> {
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn decode_output(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes[1] == 0 {
         let mut words = Vec::with_capacity(bytes.len() / 2);
@@ -646,6 +690,24 @@ fn decode_output(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connector_http_rejects_mapped_loopback_and_special_networks() {
+        for raw in [
+            "https://[::ffff:127.0.0.1]/",
+            "https://[::ffff:10.0.0.1]/",
+            "https://100.64.0.1/",
+            "https://224.0.0.1/",
+            "https://0.1.2.3/",
+            "https://[64:ff9b::7f00:1]/",
+            "https://user:secret@example.com/",
+        ] {
+            assert!(!is_allowed_remote_url(&Url::parse(raw).unwrap()), "{raw}");
+        }
+        assert!(is_allowed_remote_url(
+            &Url::parse("https://[2606:4700:4700::1111]/").unwrap()
+        ));
+    }
 
     #[test]
     fn reboot_result_is_not_an_error() {

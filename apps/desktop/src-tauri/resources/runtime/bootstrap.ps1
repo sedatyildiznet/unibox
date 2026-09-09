@@ -41,6 +41,23 @@ function Invoke-WslProbe {
     return $exitCode
 }
 
+function Invoke-WslCommand {
+    param([string[]]$Arguments, [string]$InputText)
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        if ($PSBoundParameters.ContainsKey('InputText')) {
+            $InputText | & wsl.exe @Arguments *> $null
+        } else {
+            & wsl.exe @Arguments *> $null
+        }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) { throw "Local engine command failed (exit code $exitCode)." }
+}
+
 function Write-BootstrapState([string]$State, [string]$Message) {
     $result = [ordered]@{ state = $State; message = $Message; boot_id = $script:BootId }
     $json = $result | ConvertTo-Json -Compress
@@ -128,25 +145,18 @@ function Download-Rootfs {
 
 function Import-Runtime {
     New-Item -ItemType Directory -Force -Path $DistroDir | Out-Null
-    & wsl.exe --import $Distro $DistroDir $RootfsPath --version 2
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to import the UniboxRuntime WSL distribution.'
-    }
-
+    Invoke-WslCommand -Arguments @('--import', $Distro, $DistroDir, $RootfsPath, '--version', '2')
 }
 
 function Enable-RuntimeSystemd {
-    & wsl.exe -d $Distro -- bash -lc "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf"
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to configure local engine startup.' }
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf")
     $null = Invoke-WslProbe -Arguments @('--terminate', $Distro)
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'for i in $(seq 1 30); do systemctl list-units --no-pager >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1')
 }
 
 function Invoke-LinuxScript([string]$Path) {
-    $content = Get-Content -Raw -Encoding UTF8 $Path
-    $content | & wsl.exe -d $Distro -- bash -s
-    if ($LASTEXITCODE -ne 0) {
-        throw "Runtime provisioning script failed: $Path"
-    }
+    $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-s') -InputText $content
 }
 
 try {
@@ -182,15 +192,8 @@ try {
     Invoke-LinuxScript $ProvisionScript
 
     $connectorContent = Get-Content -Raw -Encoding UTF8 $ConnectorScript
-    $connectorContent | & wsl.exe -d $Distro -- bash -lc 'cat > /opt/unibox/bin/unibox-connector && chmod 0755 /opt/unibox/bin/unibox-connector'
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to install Unibox connector manager.'
-    }
-
-    & wsl.exe -d $Distro -- bash -lc 'systemctl enable --now postgresql unibox-synapse >/dev/null && systemctl is-active --quiet postgresql unibox-synapse'
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unibox local services did not become healthy.'
-    }
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'cat > /opt/unibox/bin/unibox-connector && chmod 0755 /opt/unibox/bin/unibox-connector') -InputText $connectorContent
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'systemctl enable --now postgresql unibox-synapse >/dev/null && systemctl is-active --quiet postgresql unibox-synapse')
 
     Write-BootstrapState 'RUNTIME_READY' 'Your private local engine is ready.'
 }

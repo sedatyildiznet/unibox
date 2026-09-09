@@ -33,3 +33,5 @@ try {
 } finally {
     Remove-Item -LiteralPath $DataRoot -Recurse -Force
 }
+# The mock intentionally set LASTEXITCODE to 17. Do not leak it into the CI shell.
+exit 0

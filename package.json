@@ -8,5 +8,11 @@
     "build": "pnpm --dir apps/desktop build",
     "tauri": "pnpm --dir apps/desktop tauri",
     "check": "pnpm --dir apps/desktop check"
+  },
+  "pnpm": {
+    "overrides": {
+      "electron-to-chromium": "1.5.400",
+      "node-releases": "2.0.36"
+    }
   }
 }

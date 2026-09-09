@@ -14,6 +14,30 @@ $DistroDir = Join-Path $DataRoot 'wsl'
 $RootfsPath = Join-Path $DownloadDir $RootfsName
 $SumPath = Join-Path $DownloadDir 'SHA256SUMS'
 
+function Invoke-WslProbe {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    # Windows PowerShell 5.1 turns native stderr into NativeCommandError records.
+    # With the script-wide ErrorActionPreference=Stop that would terminate the
+    # bootstrap before we can inspect wsl.exe's real exit code. Probe commands
+    # are therefore run with non-terminating native stderr and evaluated solely
+    # by their process exit code.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & wsl.exe @Arguments *> $null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return $exitCode
+}
+
 function Request-WslInstall {
     Write-Output 'WSL2 is not ready. Requesting Windows elevation to enable it...'
     $process = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--install', '--no-distribution') -Verb RunAs -Wait -PassThru
@@ -28,19 +52,30 @@ function Ensure-Wsl {
         throw 'This Windows installation does not provide wsl.exe. Unibox requires a supported 64-bit Windows 10/11 installation with WSL2.'
     }
 
-    & wsl.exe --status *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-WslProbe -Arguments @('--status')) -ne 0) {
         Request-WslInstall
     }
 
-    & wsl.exe --set-default-version 2 *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-WslProbe -Arguments @('--set-default-version', '2')) -ne 0) {
         throw 'WSL is installed, but WSL2 could not be selected as the default runtime. Ensure virtualization is enabled and restart Windows.'
     }
 }
 
 function Test-DistroExists {
-    $distros = (& wsl.exe -l -q 2>$null) -replace "`0", ''
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $distros = (& wsl.exe -l -q 2>$null) -replace "`0", ''
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        return $false
+    }
+
     return ($distros | ForEach-Object { $_.Trim() }) -contains $Distro
 }
 
@@ -81,7 +116,14 @@ function Import-Runtime {
 
     & wsl.exe -d $Distro -- bash -lc "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf"
     if ($LASTEXITCODE -ne 0) {
-        & wsl.exe --unregister $Distro *> $null
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & wsl.exe --unregister $Distro *> $null
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         throw 'Failed to configure systemd in UniboxRuntime.'
     }
     & wsl.exe --terminate $Distro | Out-Null

@@ -139,7 +139,7 @@ impl RuntimeManager {
                 .arg(&self.data_root)
                 .output()
                 .context("failed to start Unibox runtime bootstrap")?;
-            return output_text(output, "runtime bootstrap failed");
+            output_text(output, "runtime bootstrap failed")
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -162,7 +162,7 @@ impl RuntimeManager {
                 .args(["-d", DISTRO_NAME, "--", "bash", "-lc", &shell])
                 .output()
                 .context("failed to start UniboxRuntime")?;
-            return output_text(output, "failed to start local services");
+            output_text(output, "failed to start local services")
         }
         #[cfg(not(target_os = "windows"))]
         Err(anyhow!(
@@ -177,7 +177,7 @@ impl RuntimeManager {
                 .args(["--terminate", DISTRO_NAME])
                 .output()
                 .context("failed to terminate UniboxRuntime")?;
-            return output_text(output, "failed to stop local runtime");
+            output_text(output, "failed to stop local runtime")
         }
         #[cfg(not(target_os = "windows"))]
         Err(anyhow!(
@@ -353,7 +353,7 @@ impl RuntimeManager {
                 let next = url.join(location).context("invalid redirect URL")?;
                 ensure_public_remote_url(&next).await?;
 
-                if matches!(status.as_u16(), 301 | 302 | 303)
+                if matches!(status.as_u16(), 301..=303)
                     && method != reqwest::Method::GET
                     && method != reqwest::Method::HEAD
                 {
@@ -399,7 +399,7 @@ impl RuntimeManager {
             let output = command
                 .output()
                 .context("failed to execute connector manager")?;
-            return output_text(output, "connector operation failed");
+            output_text(output, "connector operation failed")
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -425,14 +425,13 @@ impl RuntimeManager {
         #[cfg(target_os = "windows")]
         {
             let out = Command::new("wsl.exe").args(["-l", "-q"]).output();
-            return out
-                .ok()
+            out.ok()
                 .map(|o| {
                     decode_output(&o.stdout)
                         .lines()
                         .any(|x| x.trim() == DISTRO_NAME)
                 })
-                .unwrap_or(false);
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "windows"))]
         false
@@ -442,14 +441,13 @@ impl RuntimeManager {
         #[cfg(target_os = "windows")]
         {
             let out = Command::new("wsl.exe").args(["-l", "-v"]).output();
-            return out
-                .ok()
+            out.ok()
                 .map(|o| {
                     decode_output(&o.stdout).lines().any(|line| {
                         line.contains(DISTRO_NAME) && line.to_ascii_lowercase().contains("running")
                     })
                 })
-                .unwrap_or(false);
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "windows"))]
         false
@@ -471,7 +469,7 @@ impl RuntimeManager {
                 .args(["-d", DISTRO_NAME, "--", "bash", "-lc", shell])
                 .output()
                 .context("failed to execute command in UniboxRuntime")?;
-            return output_text(output, "UniboxRuntime command failed");
+            output_text(output, "UniboxRuntime command failed")
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -562,10 +560,12 @@ fn output_text(output: Output, message: &str) -> Result<String> {
 
 fn decode_output(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes[1] == 0 {
-        let words: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
+        let mut words = Vec::with_capacity(bytes.len() / 2);
+        let mut index = 0;
+        while index + 1 < bytes.len() {
+            words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
+            index += 2;
+        }
         String::from_utf16_lossy(&words)
     } else {
         String::from_utf8_lossy(bytes).to_string()

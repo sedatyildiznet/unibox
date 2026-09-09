@@ -31,13 +31,11 @@ jobs:
       - name: Validate PowerShell bootstrap syntax
         shell: pwsh
         run: |
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'apps/desktop/src-tauri/resources/runtime/bootstrap.ps1'),
-            [ref]$null,
-            [ref]$errors
-          )
-          if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
+          foreach ($file in @('apps/desktop/src-tauri/resources/runtime/bootstrap.ps1', 'scripts/test-bootstrap.ps1', 'scripts/test-windows-runtime.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
+          }
       - name: Test Windows PowerShell 5.1 bootstrap lifecycle
         shell: powershell
         run: ./scripts/test-bootstrap.ps1
@@ -46,6 +44,7 @@ jobs:
         run: ./scripts/test-bootstrap.ps1
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+      - run: pnpm test
       - run: pnpm check
       - run: pnpm build
       - run: cargo check --workspace --locked

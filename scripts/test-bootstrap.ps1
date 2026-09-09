@@ -26,6 +26,12 @@ try {
     function wsl.exe { Write-Error 'Native probe stderr'; $global:LASTEXITCODE = 17 }
     if ((Invoke-WslProbe -Arguments @('--status')) -ne 17) { throw 'Native probe exit code was lost.' }
     if ($ErrorActionPreference -ne 'Stop') { throw 'Probe failed to restore error preference.' }
+    function wsl.exe { Write-Error 'Native informational stderr'; $global:LASTEXITCODE = 0 }
+    Invoke-WslCommand -Arguments @('--status')
+    function wsl.exe { Write-Error 'Native failure stderr'; $global:LASTEXITCODE = 3 }
+    $failed = $false
+    try { Invoke-WslCommand -Arguments @('--status') } catch { $failed = $true }
+    if (-not $failed) { throw 'A failed native command must not become success.' }
     Write-BootstrapState 'RUNTIME_READY' 'Ready'
     $state = Get-Content (Join-Path $DataRoot 'bootstrap-state.json') -Raw | ConvertFrom-Json
     if ($state.state -ne 'RUNTIME_READY') { throw 'Ready state did not replace reboot state.' }

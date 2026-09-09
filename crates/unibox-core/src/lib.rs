@@ -219,7 +219,7 @@ impl RuntimeManager {
         #[cfg(target_os = "windows")]
         {
             let shell = format!(
-                "systemctl start postgresql {0} && systemctl is-active postgresql {0}",
+                "systemctl start postgresql {0} && systemctl is-active --quiet postgresql {0} && for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null && exit 0; sleep 1; done; exit 1",
                 SYNAPSE_SERVICE
             );
             let output = windows_command("wsl.exe")
@@ -251,7 +251,18 @@ impl RuntimeManager {
 
     pub fn matrix_session(&self) -> Result<MatrixSession> {
         let raw = self.wsl_capture("cat /var/lib/unibox/matrix.json")?;
-        serde_json::from_str(raw.trim()).context("invalid local Matrix session")
+        let session: MatrixSession =
+            serde_json::from_str(raw.trim()).context("invalid local Matrix session")?;
+        if session.homeserver != MATRIX_URL
+            || session.access_token.is_empty()
+            || session.access_token.contains(['\r', '\n'])
+            || !session.user_id.ends_with(":unibox.local")
+        {
+            return Err(anyhow!(
+                "The stored local session is invalid. Restore a backup or repair the local engine."
+            ));
+        }
+        Ok(session)
     }
 
     pub fn connector_status(&self, connector: &ConnectorDefinition) -> ConnectorStatus {
@@ -674,7 +685,9 @@ fn output_text(output: Output, message: &str) -> Result<String> {
 
 #[cfg(any(test, target_os = "windows"))]
 fn decode_output(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[1] == 0 {
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    if bytes.starts_with(&[0xff, 0xfe]) || (bytes.len() >= 2 && bytes[1] == 0) {
+        let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
         let mut words = Vec::with_capacity(bytes.len() / 2);
         let mut index = 0;
         while index + 1 < bytes.len() {

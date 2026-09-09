@@ -77,6 +77,7 @@ root:
 disable_existing_loggers: false
 EOF
 
+if [ ! -s "$ETC/homeserver.yaml" ]; then
 cat > "$ETC/homeserver.yaml" <<EOF
 server_name: "unibox.local"
 public_baseurl: "http://127.0.0.1:8008/"
@@ -117,6 +118,7 @@ suppress_key_server_warning: true
 
 app_service_config_files: []
 EOF
+fi
 
 chown -R unibox:unibox "$STATE" "$LOG"
 chown root:unibox "$ETC/unibox.local.signing.key" "$ETC/homeserver.yaml" "$ETC/log.config"
@@ -129,6 +131,8 @@ cat > /etc/systemd/system/unibox-synapse.service <<EOF
 Description=Unibox local Matrix homeserver
 After=network.target postgresql.service
 Requires=postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -159,17 +163,29 @@ for _ in $(seq 1 60); do
 done
 curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null
 
-if [ ! -s "$STATE/matrix.json" ]; then
-  PASSWORD=$(openssl rand -base64 36 | tr -d '\n')
-  "$VENV/bin/register_new_matrix_user" \
-    -c "$ETC/homeserver.yaml" \
-    -u unibox \
-    -p "$PASSWORD" \
-    --no-admin \
-    http://127.0.0.1:8008 >/dev/null
-
+if [ -s "$STATE/matrix.json" ]; then
+  # Refuse to overwrite session data. Recovery must preserve existing account history.
+  jq -e '.homeserver == "http://127.0.0.1:8008" and (.user_id | type == "string") and (.access_token | type == "string" and length > 0)' "$STATE/matrix.json" >/dev/null || {
+    printf 'Stored local session is invalid; restore a backup before continuing.\n' >&2
+    exit 1
+  }
+else
+  umask 077
+  if [ ! -s "$ETC/local-account.password" ]; then
+    openssl rand -base64 36 | tr -d '\n' > "$ETC/local-account.password"
+    chmod 0600 "$ETC/local-account.password"
+  fi
+  PASSWORD=$(cat "$ETC/local-account.password")
   LOGIN=$(jq -nc --arg pass "$PASSWORD" '{type:"m.login.password",identifier:{type:"m.id.user",user:"unibox"},password:$pass,initial_device_display_name:"Unibox Desktop"}')
-  RESPONSE=$(curl -fsS -H 'Content-Type: application/json' -d "$LOGIN" http://127.0.0.1:8008/_matrix/client/v3/login)
+  if ! RESPONSE=$(curl -fsS -H 'Content-Type: application/json' -d "$LOGIN" http://127.0.0.1:8008/_matrix/client/v3/login 2>/dev/null); then
+    "$VENV/bin/register_new_matrix_user" \
+      -c "$ETC/homeserver.yaml" \
+      -u unibox \
+      -p "$PASSWORD" \
+      --no-admin \
+      http://127.0.0.1:8008 >/dev/null
+    RESPONSE=$(curl -fsS -H 'Content-Type: application/json' -d "$LOGIN" http://127.0.0.1:8008/_matrix/client/v3/login)
+  fi
   ACCESS_TOKEN=$(printf '%s' "$RESPONSE" | jq -er '.access_token')
   USER_ID=$(printf '%s' "$RESPONSE" | jq -er '.user_id')
   DEVICE_ID=$(printf '%s' "$RESPONSE" | jq -er '.device_id')
@@ -181,7 +197,8 @@ if [ ! -s "$STATE/matrix.json" ]; then
     --arg access_token "$ACCESS_TOKEN" \
     --arg device_id "$DEVICE_ID" \
     '{homeserver:$homeserver,user_id:$user_id,access_token:$access_token,device_id:$device_id}' \
-    > "$STATE/matrix.json"
+    > "$STATE/matrix.json.tmp"
+  mv "$STATE/matrix.json.tmp" "$STATE/matrix.json"
   chown unibox:unibox "$STATE/matrix.json"
   chmod 0600 "$STATE/matrix.json"
 fi

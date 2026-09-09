@@ -19,3 +19,14 @@
 - GitHub Release updater wiring
 - Windows managed-runtime bootstrap scaffold
 - CI and draft release workflows
+
+
+## Unreleased
+
+- Persist Windows setup states and resume after the required restart without presenting an expected lifecycle step as a failure.
+- Preserve existing engine configuration and local account state on setup retries.
+- Harden connector HTTP validation and background native execution.
+- Add attachment sending/downloading, replies, editing, read status, typing, reaction counts and opt-in notifications.
+- Add regression tests and a dedicated Windows runtime acceptance workflow.
+
+See `docs/IMPLEMENTATION_STATUS.md` for outstanding release requirements.

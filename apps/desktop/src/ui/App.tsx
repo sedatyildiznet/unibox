@@ -6,7 +6,6 @@ import {
   Download,
   Inbox,
   LoaderCircle,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -17,6 +16,9 @@ import {
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { isPermissionGranted, requestPermission, sendNotification, onAction } from '@tauri-apps/plugin-notification';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import {
@@ -29,7 +31,7 @@ import {
   type RuntimeStatus,
   type BootstrapResult,
 } from '../lib/backend';
-import { startInbox, type InboxController, type InboxRoom } from '../lib/matrix';
+import { startInbox, type InboxController, type InboxRoom, type InboxMessage } from '../lib/matrix';
 
 type NavMode = 'all' | 'unread' | 'mentions' | 'archive' | 'favorites';
 type ListFilter = 'all' | 'direct' | 'groups' | 'unread' | 'favorites';
@@ -60,6 +62,12 @@ export function App() {
   const [listFilter, setListFilter] = useState<ListFilter>('all');
   const [serviceFilter, setServiceFilter] = useState<string | null>(null);
   const [composer, setComposer] = useState('');
+  const [reply, setReply] = useState<InboxMessage | null>(null);
+  const [editing, setEditing] = useState<InboxMessage | null>(null);
+  const [sending, setSending] = useState(false);
+  const attachmentRef = useRef<HTMLInputElement>(null);
+  const lastTyping = useRef(0);
+  useEffect(() => { setReply(null); setEditing(null); setComposer(''); }, [selectedRoomId]);
   const [showServices, setShowServices] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [connectorStatuses, setConnectorStatuses] = useState<Record<string, ConnectorStatus>>({});
@@ -72,6 +80,10 @@ export function App() {
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
+  const [version, setVersion] = useState('');
+  const [notifications, setNotifications] = useState(localStorage.getItem('unibox.notifications') === 'true');
+  const notificationEnabled = useRef(notifications);
+  notificationEnabled.current = notifications;
   const searchRef = useRef<HTMLInputElement>(null);
 
   const visibleRooms = useMemo(() => {
@@ -96,7 +108,7 @@ export function App() {
     return next;
   }, [rooms, navMode, listFilter, serviceFilter, query]);
 
-  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? visibleRooms[0] ?? rooms[0];
+  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? visibleRooms[0];
   const networks = [...new Set(rooms.map(room => room.service))].sort();
   const allCount = rooms.filter(room => !room.archived).length;
   const unreadCount = rooms.filter(room => !room.archived && room.unread > 0).length;
@@ -111,13 +123,18 @@ export function App() {
   }
 
   useEffect(() => {
+    void getVersion().then(setVersion).catch(() => undefined);
     void backend.registry().then(setRegistry).catch(error => setRuntimeError(errorText(error)));
     if (!startupChecked.current) {
       startupChecked.current = true;
       void refreshRuntime().then(async status => {
         setBootstrap(status.bootstrap ?? null);
         if (status.platform === 'windows' && (!status.synapse_ready || !status.matrix_session_ready)) {
-          if (status.bootstrap || status.distro_installed) await installRuntime();
+          if (status.distro_installed && status.matrix_session_ready && (!status.bootstrap || status.bootstrap.state === 'RUNTIME_READY')) {
+            setRuntimeBusy(true);
+            try { await backend.startRuntime(); await refreshRuntime(); }
+            finally { setRuntimeBusy(false); }
+          } else if (status.bootstrap || status.distro_installed) await installRuntime();
         }
       }).catch(() => setRuntimeError('Unable to check the local engine. Please retry.'));
     }
@@ -132,6 +149,11 @@ export function App() {
       .matrixSession()
       .then(session => startInbox(session, nextRooms => {
         if (!disposed) setRooms(nextRooms);
+      }, (roomId, name) => {
+        if (!disposed && notificationEnabled.current && !document.hasFocus()) {
+          // Keep message contents out of lock-screen notifications.
+          sendNotification({ title: name, body: 'New message in Unibox', extra: { roomId } });
+        }
       }))
       .then(next => {
         if (disposed) {
@@ -151,6 +173,27 @@ export function App() {
       setInbox(null);
     };
   }, [runtime?.synapse_ready, runtime?.matrix_session_ready]);
+
+  useEffect(() => {
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void onAction(notification => {
+      const roomId = notification.extra?.roomId;
+      if (typeof roomId === 'string') {
+        setSelectedRoomId(roomId);
+        void getCurrentWindow().show().then(() => getCurrentWindow().unminimize()).then(() => getCurrentWindow().setFocus()).catch(() => undefined);
+      }
+    }).then(listener => { if (disposed) void listener.unregister(); else cleanup = () => { void listener.unregister(); }; }).catch(() => undefined);
+    return () => { disposed = true; cleanup?.(); };
+  }, []);
+
+  async function toggleNotifications(): Promise<void> {
+    if (notifications) { setNotifications(false); localStorage.setItem('unibox.notifications', 'false'); return; }
+    try {
+      const granted = await isPermissionGranted() || await requestPermission() === 'granted';
+      setNotifications(granted); localStorage.setItem('unibox.notifications', String(granted));
+    } catch { setRuntimeError('Windows notifications could not be enabled.'); }
+  }
 
   useEffect(() => {
     if (!selectedRoomId && visibleRooms[0]) setSelectedRoomId(visibleRooms[0].id);
@@ -379,16 +422,43 @@ export function App() {
   }
 
   async function sendMessage(): Promise<void> {
-    if (!inbox || !selectedRoom || !composer.trim()) return;
+    if (!inbox || !selectedRoom || !composer.trim() || sending) return;
     const text = composer;
+    setSending(true);
     setComposer('');
     try {
-      await inbox.sendText(selectedRoom.id, text);
+      if (editing) await inbox.editMessage(selectedRoom.id, editing.id, text);
+      else await inbox.sendText(selectedRoom.id, text, reply?.id);
+      setReply(null);
+      setEditing(null);
       await inbox.markRead(selectedRoom.id);
     } catch (error) {
       setRuntimeError(errorText(error));
       setComposer(text);
-    }
+    } finally { setSending(false); }
+  }
+
+  async function sendAttachment(file?: File): Promise<void> {
+    if (!file || !inbox || !selectedRoom || sending) return;
+    if (file.size > 25 * 1024 * 1024) { setRuntimeError('Attachments must be 25 MB or smaller.'); return; }
+    setSending(true);
+    try { await inbox.sendAttachment(selectedRoom.id, file); }
+    catch { setRuntimeError('The attachment could not be sent. Please retry.'); }
+    finally { setSending(false); if (attachmentRef.current) attachmentRef.current.value = ''; }
+  }
+
+  async function downloadAttachment(message: InboxMessage): Promise<void> {
+    if (!inbox || !message.url) return;
+    try {
+      const blob = await inbox.downloadMedia(message.url);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = message.body || 'attachment';
+      document.body.appendChild(link);
+      link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { setRuntimeError('The attachment could not be downloaded. Please retry.'); }
   }
 
   async function toggleFavorite(): Promise<void> {
@@ -523,39 +593,55 @@ export function App() {
             <header>
               <div><h2>{selectedRoom.name}</h2><span>{selectedRoom.service}{selectedRoom.unread > 0 ? ` · ${selectedRoom.unread} unread` : ''}</span></div>
               <div className="headerActions">
+                <button title={selectedRoom.muted ? 'Unmute notifications' : 'Mute notifications'} onClick={() => void inbox?.toggleMuted(selectedRoom.id, !selectedRoom.muted).catch(() => setRuntimeError('Notification preference could not be saved.'))}>{selectedRoom.muted ? 'Unmute' : 'Mute'}</button>
                 <button title={selectedRoom.favorite ? 'Remove from favorites' : 'Add to favorites'} className={selectedRoom.favorite ? 'selectedAction' : ''} onClick={() => void toggleFavorite()}><Star size={18} /></button>
                 <button title={selectedRoom.archived ? 'Restore conversation' : 'Archive conversation'} onClick={() => void toggleArchive()}><Archive size={18} /></button>
-                <button title="Conversation options"><MoreHorizontal size={18} /></button>
+
               </div>
             </header>
             {runtimeError && <div className="conversationError"><ErrorBox text={runtimeError} /></div>}
             <div className="messages">
+              <button onClick={() => void inbox?.loadEarlier(selectedRoom.id).catch(() => setRuntimeError('Earlier messages could not be loaded.'))}>Load earlier messages</button>
               {selectedRoom.messages.map(message => (
                 <div key={message.id} className={message.mine ? 'bubble mine' : 'bubble'}>
                   <b>{message.mine ? 'You' : message.sender}</b>
+                  {message.replyTo && <blockquote>{selectedRoom.messages.find(item => item.id === message.replyTo)?.body || 'Reply to an earlier message'}</blockquote>}
                   <p>{message.body || `[${message.msgtype.replace('m.', '')}]`}</p>
+                  {message.url && <button onClick={() => void downloadAttachment(message)}><Download size={14} /> Download attachment{message.size ? ` · ${(message.size / 1024).toFixed(0)} KB` : ''}</button>}
+                  {message.reactions.length > 0 && <div className="reactionList">{message.reactions.map(reaction => <span key={reaction.key}>{reaction.key} {reaction.count}</span>)}</div>}
                   <div className="bubbleFooter">
-                    <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                    <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}{message.edited ? ' · edited' : ''}{message.mine && message.read ? ' · Read' : ''}</small>
                     <div className="bubbleActions">
-                      <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍')}>👍</button>
-                      {message.mine && <button title="Delete message" onClick={() => void inbox?.deleteMessage(selectedRoom.id, message.id)}><Trash2 size={13} /></button>}
+                      <button title="Reply" onClick={() => { setReply(message); setEditing(null); }}>Reply</button>
+                      {message.mine && message.msgtype === 'm.text' && <button title="Edit" onClick={() => { setEditing(message); setReply(null); setComposer(message.body); }}>Edit</button>}
+                      <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍').catch(() => setRuntimeError('Reaction could not be sent.'))}>👍</button>
+                      {message.mine && <button title="Delete message" onClick={() => { if (window.confirm('Delete this message for everyone, where supported?')) void inbox?.deleteMessage(selectedRoom.id, message.id).catch(() => setRuntimeError('Message could not be deleted.')); }}><Trash2 size={13} /></button>}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+            {selectedRoom.typing.length > 0 && <small role="status">{selectedRoom.typing.join(', ')} typing…</small>}
+            {(reply || editing) && <div className="replyContext"><span>{editing ? 'Editing' : 'Replying to'}: {(editing || reply)?.body}</span><button onClick={() => { setReply(null); setEditing(null); setComposer(''); }} aria-label="Cancel reply or edit"><X size={14} /></button></div>}
             <div className="composer">
-              <button aria-label="Add attachment" title="Attachments are coming in the next media capability pass"><Plus size={18} /></button>
+              <input hidden ref={attachmentRef} type="file" onChange={event => void sendAttachment(event.target.files?.[0])} />
+              <button aria-label="Add attachment" disabled={sending} title="Send a file up to 25 MB" onClick={() => attachmentRef.current?.click()}><Plus size={18} /></button>
               <input
                 value={composer}
-                onChange={event => setComposer(event.target.value)}
-                onFocus={() => void inbox?.markRead(selectedRoom.id)}
+                onChange={event => {
+                  setComposer(event.target.value);
+                  if (Date.now() - lastTyping.current > 5000) {
+                    lastTyping.current = Date.now();
+                    void inbox?.client.sendTyping(selectedRoom.id, true, 10000).catch(() => undefined);
+                  }
+                }}
+                onFocus={() => void inbox?.markRead(selectedRoom.id).catch(() => undefined)}
                 onKeyDown={event => {
                   if (event.key === 'Enter' && !event.shiftKey) void sendMessage();
                 }}
                 placeholder={`Message ${selectedRoom.name}…`}
               />
-              <button className="send" onClick={() => void sendMessage()} aria-label="Send"><Send size={18} /></button>
+              <button className="send" disabled={sending || !composer.trim()} onClick={() => void sendMessage()} aria-label="Send"><Send size={18} /></button>
             </div>
           </>
         ) : (
@@ -595,17 +681,18 @@ export function App() {
         <div className="modalBackdrop" onMouseDown={() => setShowSettings(false)}>
           <div className="modal settingsModal" onMouseDown={event => event.stopPropagation()}>
             <div className="modalHeader">
-              <div><h2>Settings</h2><p>Local engine, connector health and updates.</p></div>
+              <div><h2>Settings</h2><p>Unibox {version} · Local engine, connector health and updates.</p></div>
               <button onClick={() => setShowSettings(false)}><X size={20} /></button>
             </div>
             <div className="privacyCard settingsPrivacy">
               <strong>Local-first by design</strong>
-              <span>Synapse, PostgreSQL, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>
+              <span>Connected accounts, message history and media live on this device. Unibox has no central chat-storage service.</span>
             </div>
             <div className="settingsSection">
               <h3>Local engine</h3>
-              <div className="settingsRow"><span>Synapse</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
-              <div className="settingsRow"><span>Matrix session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
+              <button onClick={() => void toggleNotifications()}>{notifications ? 'Disable notifications' : 'Enable notifications'}</button>
+              <div className="settingsRow"><span>Messaging service</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
+              <div className="settingsRow"><span>Local session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
               <div className="settingsRow"><span>Data</span><code>{runtime.data_root}</code></div>
             </div>
             <div className="settingsSection">

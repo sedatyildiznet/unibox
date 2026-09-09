@@ -59,13 +59,13 @@
     "id": "instagram",
     "name": "Instagram",
     "category": "social",
-    "repository": "mautrix/instagram",
+    "repository": "mautrix/meta",
     "binary": "mautrix-instagram",
     "asset_linux_amd64": "mautrix-instagram-amd64",
     "port": 29319,
     "maturity": "beta",
     "adapter": "bridgev2",
-    "description": "Instagram direct-message bridge.",
+    "description": "Instagram direct-message bridge from the current mautrix/meta codebase.",
     "multi_account": true,
     "risk_notice": "Uses an unofficial client implementation and may trigger Meta security checks."
   },
@@ -107,7 +107,9 @@
     "maturity": "beta",
     "adapter": "python-legacy",
     "description": "Legacy Python Google Chat bridge.",
-    "multi_account": true
+    "multi_account": true,
+    "bot_localpart": "googlechatbot",
+    "legacy_login": "login"
   },
   {
     "id": "slack",
@@ -193,11 +195,11 @@
     "category": "other",
     "repository": "mautrix/irc",
     "binary": "mautrix-irc",
-    "asset_linux_amd64": "mautrix-irc-amd64",
+    "asset_linux_amd64": "",
     "port": 29341,
     "maturity": "experimental",
-    "adapter": "bridgev2",
-    "description": "IRC bridge.",
+    "adapter": "source-go",
+    "description": "IRC bridge built locally from the upstream mautrix/irc source because upstream does not currently publish GitHub release binaries.",
     "multi_account": true
   }
 ]

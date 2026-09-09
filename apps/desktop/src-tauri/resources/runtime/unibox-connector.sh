@@ -403,6 +403,9 @@ update_source_go() {
   fi
 }
 
+exec 9>/var/lock/unibox-maintenance.lock
+flock -n 9 || fail 'Another local maintenance operation is running'
+
 [ "$#" -ge 2 ] || fail 'usage: unibox-connector <install|start|stop|update> <id> ...'
 cmd="$1"; id="$2"; shift 2
 valid_id "$id" || fail 'invalid connector id'

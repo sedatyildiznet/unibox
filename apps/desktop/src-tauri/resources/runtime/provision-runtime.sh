@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+exec 9>/var/lock/unibox-maintenance.lock
+flock -n 9 || { printf 'Another local maintenance operation is running.\n' >&2; exit 1; }
+
 export DEBIAN_FRONTEND=noninteractive
 VENV=/opt/unibox/synapse-venv
 ETC=/etc/unibox

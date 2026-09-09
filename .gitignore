@@ -16,3 +16,6 @@ runtime-data/
 
 *.tsbuildinfo
 runtime-e2e.json
+
+__pycache__/
+*.pyc

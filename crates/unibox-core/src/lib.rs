@@ -191,6 +191,59 @@ impl RuntimeManager {
         }
     }
 
+    pub fn maintenance(
+        &self,
+        script: &Path,
+        operation: &str,
+        destination: &Path,
+    ) -> Result<String> {
+        if !matches!(operation, "backup" | "restore")
+            || !destination.is_absolute()
+            || destination.extension().and_then(|value| value.to_str()) != Some("uniboxbackup")
+        {
+            return Err(anyhow!("Choose an absolute .uniboxbackup file path."));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use std::io::Write;
+            use std::process::Stdio;
+            let content =
+                std::fs::read(script).context("The maintenance resource is unavailable.")?;
+            let mut child = windows_command("wsl.exe")
+                .args(["-d", DISTRO_NAME, "--", "bash", "-lc",
+                    "cat > /opt/unibox/bin/unibox-maintenance.py.next && chmod 0700 /opt/unibox/bin/unibox-maintenance.py.next && mv /opt/unibox/bin/unibox-maintenance.py.next /opt/unibox/bin/unibox-maintenance.py"])
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow!("Maintenance input is unavailable."))?
+                .write_all(&content)?;
+            output_text(child.wait_with_output()?, "Unable to prepare maintenance")?;
+            let translated = windows_command("wsl.exe")
+                .args(["-d", DISTRO_NAME, "--", "wslpath", "-a", "-u"])
+                .arg(destination)
+                .output()?;
+            let path = output_text(translated, "Unable to access the selected file")?;
+            let output = windows_command("wsl.exe")
+                .args([
+                    "-d",
+                    DISTRO_NAME,
+                    "--",
+                    "/opt/unibox/synapse-venv/bin/python",
+                    "/opt/unibox/bin/unibox-maintenance.py",
+                    operation,
+                    path.trim(),
+                ])
+                .output()?;
+            output_text(output, "Local maintenance failed")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = script;
+            Err(anyhow!("Managed backup and restore require Windows."))
+        }
+    }
+
     pub fn restart_windows(&self) -> Result<()> {
         #[cfg(target_os = "windows")]
         {

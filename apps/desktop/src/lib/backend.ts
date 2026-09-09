@@ -76,7 +76,13 @@ export type LoginStep = {
   complete?: { user_login_id: string };
 };
 
+export type DesktopPreferences = { close_to_tray: boolean; run_at_startup: boolean; start_minimized: boolean };
+
 export const backend = {
+  desktopPreferences: () => invoke<DesktopPreferences>('desktop_preferences'),
+  saveDesktopPreferences: (preferences: DesktopPreferences) => invoke<void>('save_desktop_preferences', { preferences }),
+  maintenance: (operation: 'backup' | 'restore', destination: string) => invoke<string>('runtime_maintenance', { operation, destination }),
+  exportDiagnostics: (destination: string) => invoke<void>('export_diagnostics', { destination }),
   registry: () => invoke<ConnectorDefinition[]>('connector_registry'),
   status: () => invoke<RuntimeStatus>('runtime_status'),
   bootstrap: () => invoke<BootstrapResult>('bootstrap_runtime'),

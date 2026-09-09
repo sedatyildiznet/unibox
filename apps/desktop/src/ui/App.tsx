@@ -19,7 +19,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { isPermissionGranted, requestPermission, sendNotification, onAction } from '@tauri-apps/plugin-notification';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getVersion } from '@tauri-apps/api/app';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm, open, save } from '@tauri-apps/plugin-dialog';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import {
@@ -31,6 +31,7 @@ import {
   type LoginStep,
   type RuntimeStatus,
   type BootstrapResult,
+  type DesktopPreferences,
 } from '../lib/backend';
 import { startInbox, type InboxController, type InboxRoom, type InboxMessage } from '../lib/matrix';
 
@@ -81,6 +82,9 @@ export function App() {
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
+  const [desktopPreferences, setDesktopPreferences] = useState<DesktopPreferences>({ close_to_tray: false, run_at_startup: false, start_minimized: false });
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
   const [version, setVersion] = useState('');
   const [notifications, setNotifications] = useState(localStorage.getItem('unibox.notifications') === 'true');
   const notificationEnabled = useRef(notifications);
@@ -124,6 +128,7 @@ export function App() {
   }
 
   useEffect(() => {
+    void backend.desktopPreferences().then(setDesktopPreferences).catch(() => undefined);
     void getVersion().then(setVersion).catch(() => undefined);
     void backend.registry().then(setRegistry).catch(error => setRuntimeError(errorText(error)));
     if (!startupChecked.current) {
@@ -187,6 +192,41 @@ export function App() {
     }).then(listener => { if (disposed) void listener.unregister(); else cleanup = () => { void listener.unregister(); }; }).catch(() => undefined);
     return () => { disposed = true; cleanup?.(); };
   }, []);
+
+  async function updateDesktopPreference(key: keyof DesktopPreferences, value: boolean): Promise<void> {
+    const next = { ...desktopPreferences, [key]: value };
+    try { await backend.saveDesktopPreferences(next); setDesktopPreferences(next); }
+    catch { setMaintenanceMessage('This desktop preference could not be saved.'); }
+  }
+
+  async function runMaintenance(operation: 'backup' | 'restore'): Promise<void> {
+    if (maintenanceBusy) return;
+    setMaintenanceMessage('');
+    try {
+      const filters = [{ name: 'Unibox backup', extensions: ['uniboxbackup'] }];
+      const selected = operation === 'backup'
+        ? await save({ defaultPath: `Unibox-${new Date().toISOString().slice(0, 10)}.uniboxbackup`, filters })
+        : await open({ multiple: false, directory: false, filters });
+      if (!selected || typeof selected !== 'string') return;
+      const approved = await confirm(operation === 'backup'
+        ? 'Your backup includes account sessions and private messages. It is not encrypted. Keep it in a private location. Messaging will pause briefly.'
+        : 'Restore a backup you created and trust. Current messages and account sessions will be replaced. Matching engine and connector versions are required. Unibox will restart afterward.',
+        { title: operation === 'backup' ? 'Create private backup' : 'Restore local data', kind: 'warning' });
+      if (!approved) return;
+      setMaintenanceBusy(true);
+      await backend.maintenance(operation, selected);
+      if (operation === 'restore') await relaunch();
+      else setMaintenanceMessage('Backup saved. Keep this file private.');
+    } catch { setMaintenanceMessage('Maintenance could not finish. Check free space, engine health and matching backup versions.'); }
+    finally { setMaintenanceBusy(false); }
+  }
+
+  async function exportDiagnostics(): Promise<void> {
+    try {
+      const selected = await save({ defaultPath: 'Unibox-diagnostics.json', filters: [{ name: 'Diagnostic report', extensions: ['json'] }] });
+      if (selected) { await backend.exportDiagnostics(selected); setMaintenanceMessage('Diagnostic report saved without tokens, sessions or raw logs.'); }
+    } catch { setMaintenanceMessage('The diagnostic report could not be saved.'); }
+  }
 
   async function toggleNotifications(): Promise<void> {
     if (notifications) { setNotifications(false); localStorage.setItem('unibox.notifications', 'false'); return; }
@@ -690,7 +730,18 @@ export function App() {
               <span>Connected accounts, message history and media live on this device. Unibox has no central chat-storage service.</span>
             </div>
             <div className="settingsSection">
+              <h3>Desktop</h3>
+              {([['close_to_tray', 'Close to system tray'], ['run_at_startup', 'Start with Windows'], ['start_minimized', 'Start minimized']] as const).map(([key, label]) => (
+                <label className="settingsRow" key={key}><span>{label}</span><input type="checkbox" checked={desktopPreferences[key]} onChange={event => void updateDesktopPreference(key, event.target.checked)} /></label>
+              ))}
               <h3>Local engine</h3>
+              <div className="settingsTitleRow">
+                <button disabled={maintenanceBusy} onClick={() => void runMaintenance('backup')}>Create backup</button>
+                <button disabled={maintenanceBusy} onClick={() => void runMaintenance('restore')}>Restore backup</button>
+                <button disabled={maintenanceBusy} onClick={() => void exportDiagnostics()}>Export diagnostics</button>
+              </div>
+              {maintenanceBusy && <p role="status">Maintaining local data. Keep Unibox open…</p>}
+              {maintenanceMessage && <p role="status">{maintenanceMessage}</p>}
               <button onClick={() => void toggleNotifications()}>{notifications ? 'Disable notifications' : 'Enable notifications'}</button>
               <div className="settingsRow"><span>Messaging service</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
               <div className="settingsRow"><span>Local session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
@@ -701,7 +752,7 @@ export function App() {
               <div className="connectorSettingsList">
                 {registry.filter(item => connectorStatuses[item.id]?.installed).map(connector => {
                   const status = connectorStatuses[connector.id];
-                  const busy = settingsBusyId === connector.id;
+                  const busy = maintenanceBusy || settingsBusyId === connector.id;
                   return (
                     <div className="connectorSettingsRow" key={connector.id}>
                       <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>

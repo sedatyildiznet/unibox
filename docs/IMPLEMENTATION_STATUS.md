@@ -14,6 +14,10 @@ The current work improves the engineering build; it is not a production-complete
 - Bounded history expansion, event-driven refresh, notification opt-in and per-room notification mute.
 - Python update environments keep their original filesystem paths to preserve interpreter references.
 
+- Version-matched backups with PostgreSQL dumps, validated restores and pre-restore recovery snapshots.
+- System tray, optional close-to-tray, Windows startup and start-minimized preferences.
+- Allowlisted diagnostic report export without raw logs or session material.
+
 ## Verification boundaries
 
 Unit tests and build checks do not establish external-provider compatibility. Windows runtime acceptance is described in `WINDOWS_ACCEPTANCE.md`. No provider account, real Windows/WSL installation or signed application update has been accepted by the automated unit suite.
@@ -24,8 +28,8 @@ Unit tests and build checks do not establish external-provider compatibility. Wi
 - Provider-specific capability discovery and account rename/reconnect/logout management.
 - Full legacy Discord/Google Chat login acceptance and per-provider maturity review.
 - Database-aware connector rollback; current binary/venv rollback cannot reverse schema migrations.
-- End-user backup/restore with recovery and optional encryption; no completed backup feature is claimed.
-- Tray, close-to-tray, Windows autostart, start-minimized, comprehensive diagnostic export and cache controls.
+- Windows acceptance of backup/restore, durable recovery after forced machine shutdown, optional encryption and desktop-preference backup.
+- Installed-Windows acceptance of tray/startup behavior, comprehensive diagnostics and cache controls.
 - Global indexed message search, media preview, voice notes, threads, stickers and polls.
 - Signed updater keys/public key configuration and an actual signed upgrade acceptance test.
 - Installer/uninstaller data-removal options and clean-machine release acceptance.

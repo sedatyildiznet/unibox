@@ -5,6 +5,31 @@ on:
 permissions:
   contents: read
 jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: unibox_ci_only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: unibox_ci_only
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: python3 scripts/test-maintenance.py
+      - run: python3 scripts/test-maintenance-postgres.py
+      - run: python3 -m py_compile apps/desktop/src-tauri/resources/runtime/unibox-maintenance.py
   desktop:
     runs-on: windows-latest
     steps:

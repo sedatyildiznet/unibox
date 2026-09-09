@@ -14,14 +14,28 @@ $DistroDir = Join-Path $DataRoot 'wsl'
 $RootfsPath = Join-Path $DownloadDir $RootfsName
 $SumPath = Join-Path $DownloadDir 'SHA256SUMS'
 
+function Request-WslInstall {
+    Write-Output 'WSL2 is not ready. Requesting Windows elevation to enable it...'
+    $process = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--install', '--no-distribution') -Verb RunAs -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Windows could not enable WSL2 automatically (exit code $($process.ExitCode))."
+    }
+    throw 'WSL2 was enabled. Restart Windows once, then reopen Unibox to finish installing the local engine.'
+}
+
 function Ensure-Wsl {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-        throw 'WSL is not available on this Windows installation. Install the Windows Subsystem for Linux feature and restart Windows.'
+        throw 'This Windows installation does not provide wsl.exe. Unibox requires a supported 64-bit Windows 10/11 installation with WSL2.'
     }
 
     & wsl.exe --status *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw 'WSL is installed but not ready. Run "wsl --install --no-distribution" as Administrator, restart Windows, then open Unibox again.'
+        Request-WslInstall
+    }
+
+    & wsl.exe --set-default-version 2 *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'WSL is installed, but WSL2 could not be selected as the default runtime. Ensure virtualization is enabled and restart Windows.'
     }
 }
 
@@ -67,10 +81,11 @@ function Import-Runtime {
 
     & wsl.exe -d $Distro -- bash -lc "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf"
     if ($LASTEXITCODE -ne 0) {
+        & wsl.exe --unregister $Distro *> $null
         throw 'Failed to configure systemd in UniboxRuntime.'
     }
     & wsl.exe --terminate $Distro | Out-Null
-    Start-Sleep -Milliseconds 600
+    Start-Sleep -Milliseconds 800
 }
 
 function Invoke-LinuxScript([string]$Path) {

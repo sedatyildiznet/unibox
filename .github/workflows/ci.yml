@@ -20,6 +20,21 @@ jobs:
       - run: python scripts/verify-registry.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate runtime shell scripts
+        shell: bash
+        run: |
+          bash -n apps/desktop/src-tauri/resources/runtime/provision-runtime.sh
+          bash -n apps/desktop/src-tauri/resources/runtime/unibox-connector.sh
+      - name: Validate PowerShell bootstrap syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'apps/desktop/src-tauri/resources/runtime/bootstrap.ps1'),
+            [ref]$null,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
       - run: pnpm check
       - run: pnpm build
       - run: cargo check --workspace

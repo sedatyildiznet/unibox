@@ -170,7 +170,18 @@ register_appservice() {
     curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 && return 0
     sleep 1
   done
-  fail 'Synapse did not recover after appservice registration'
+
+  printf 'Appservice registration made Synapse unhealthy; rolling back %s.\n' "$target" >&2
+  /opt/unibox/bin/unibox-appservice-unregister "$target" || true
+  rm -f "$target"
+  systemctl restart unibox-synapse || true
+  for _ in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1; then
+      fail 'Connector appservice registration was rejected and rolled back safely'
+    fi
+    sleep 1
+  done
+  fail 'Connector appservice registration failed and Synapse could not recover automatically'
 }
 
 finish_go_install() {
@@ -310,6 +321,29 @@ EOF
   touch "$dir/.installed"; chown unibox:unibox "$dir/.installed"
 }
 
+update_python_googlechat() {
+  local id="$1" repo="$2" dir="$ROOT/$1" active="$ROOT/$1/venv"
+  local staging="$ROOT/$1/venv.staging" backup="$ROOT/$1/venv.rollback"
+  [ -x "$active/bin/python" ] || fail "$id is not installed"
+  rm -rf "$staging" "$backup"
+  python3 -m venv "$staging"
+  "$staging/bin/pip" install --disable-pip-version-check --upgrade pip wheel setuptools >/dev/null
+  "$staging/bin/pip" install --disable-pip-version-check "git+https://github.com/$repo.git" >/dev/null
+  systemctl stop "unibox-$id.service" || true
+  mv "$active" "$backup"
+  mv "$staging" "$active"
+  if systemctl start "unibox-$id.service" && sleep 3 && systemctl is-active --quiet "unibox-$id.service"; then
+    rm -rf "$backup"
+    printf '%s Python connector updated successfully.\n' "$id"
+  else
+    systemctl stop "unibox-$id.service" || true
+    rm -rf "$active"
+    mv "$backup" "$active"
+    systemctl start "unibox-$id.service" || true
+    fail "$id Python connector update failed and was rolled back"
+  fi
+}
+
 update_release_go() {
   local id="$1" repo="$2" binary="$3" asset="$4"
   local dir="$ROOT/$id" executable="$dir/$binary" tmp backup
@@ -391,7 +425,7 @@ case "$cmd" in
     adapter="$1"; repo="$2"; binary="$3"; asset="$4"
     case "$adapter" in
       source-go) update_source_go "$id" "$repo" "$binary" ;;
-      python-legacy) fail 'Python legacy connector updates are applied by reinstalling the connector in this release' ;;
+      python-legacy) update_python_googlechat "$id" "$repo" ;;
       bridgev2|legacy-go) update_release_go "$id" "$repo" "$binary" "$asset" ;;
       *) fail "unsupported connector adapter: $adapter" ;;
     esac

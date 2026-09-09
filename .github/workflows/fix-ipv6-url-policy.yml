@@ -24,24 +24,16 @@ jobs:
           path = Path('crates/unibox-core/src/lib.rs')
           text = path.read_text(encoding='utf-8')
 
-          old1 = '    if host.parse::<IpAddr>().is_ok() {\n        return Ok(());\n    }'
-          new1 = '    if parse_host_ip(host).is_some() {\n        return Ok(());\n    }'
-          if old1 not in text:
-              raise SystemExit('missing direct-IP parse block')
-          text = text.replace(old1, new1, 1)
+          needle = 'host.parse::<IpAddr>()'
+          count = text.count(needle)
+          if count != 2:
+              raise SystemExit(f'expected 2 host IP parse sites, found {count}')
+          text = text.replace(needle, 'parse_host_ip(host)')
 
-          old2 = '''    host.parse::<IpAddr>()
-              .map(|ip| !is_private_ip(ip))
-              .unwrap_or(true)
-          }
-
-          fn is_private_ip(ip: IpAddr) -> bool {'''.replace('          ', '')
-          new2 = '''    parse_host_ip(host)
-              .map(|ip| !is_private_ip(ip))
-              .unwrap_or(true)
-          }
-
-          fn parse_host_ip(host: &str) -> Option<IpAddr> {
+          marker = 'fn is_private_ip(ip: IpAddr) -> bool {'
+          if marker not in text:
+              raise SystemExit('missing is_private_ip marker')
+          helper = '''fn parse_host_ip(host: &str) -> Option<IpAddr> {
               let normalized = host
                   .strip_prefix('[')
                   .and_then(|value| value.strip_suffix(']'))
@@ -49,21 +41,19 @@ jobs:
               normalized.parse::<IpAddr>().ok()
           }
 
-          fn is_private_ip(ip: IpAddr) -> bool {'''.replace('          ', '')
-          if old2 not in text:
-              raise SystemExit('missing URL allow-policy parse block')
-          text = text.replace(old2, new2, 1)
+          '''.replace('          ', '')
+          text = text.replace(marker, helper + marker, 1)
 
-          old3 = '            "https://[::1]/test",\n            "https://[fc00::1]/test",'
-          new3 = '            "https://[::1]/test",\n            "https://[::]/test",\n            "https://[fc00::1]/test",\n            "https://[fe80::1]/test",'
-          if old3 not in text:
-              raise SystemExit('missing IPv6 test cases block')
-          text = text.replace(old3, new3, 1)
+          old_tests = '            "https://[::1]/test",\n            "https://[fc00::1]/test",'
+          new_tests = '            "https://[::1]/test",\n            "https://[::]/test",\n            "https://[fc00::1]/test",\n            "https://[fe80::1]/test",'
+          if old_tests not in text:
+              raise SystemExit('missing IPv6 test list marker')
+          text = text.replace(old_tests, new_tests, 1)
 
+          if text.count('parse_host_ip(host)') != 2:
+              raise SystemExit('unexpected normalized host parse count')
           if 'fn parse_host_ip(host: &str) -> Option<IpAddr>' not in text:
-              raise SystemExit('IPv6 helper was not inserted')
-          if 'if parse_host_ip(host).is_some()' not in text:
-              raise SystemExit('direct IP path was not updated')
+              raise SystemExit('helper insertion failed')
 
           path.write_text(text, encoding='utf-8')
           PY

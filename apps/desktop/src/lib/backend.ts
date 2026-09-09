@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 
+export type BootstrapResult = {
+  state: 'INSTALLING_WSL' | 'REBOOT_REQUIRED' | 'RUNTIME_INSTALLING' | 'RUNTIME_READY' | 'ERROR';
+  message: string;
+};
+
 export type RuntimeStatus = {
+  bootstrap?: BootstrapResult | null;
   platform: string;
   wsl_available: boolean;
   distro_installed: boolean;
@@ -73,7 +79,8 @@ export type LoginStep = {
 export const backend = {
   registry: () => invoke<ConnectorDefinition[]>('connector_registry'),
   status: () => invoke<RuntimeStatus>('runtime_status'),
-  bootstrap: () => invoke<string>('bootstrap_runtime'),
+  bootstrap: () => invoke<BootstrapResult>('bootstrap_runtime'),
+  restartWindows: () => invoke<void>('restart_windows'),
   startRuntime: () => invoke<string>('start_runtime'),
   stopRuntime: () => invoke<string>('stop_runtime'),
   matrixSession: () => invoke<MatrixSession>('matrix_session'),

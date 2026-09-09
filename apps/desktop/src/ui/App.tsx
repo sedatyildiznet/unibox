@@ -27,6 +27,7 @@ import {
   type LoginFlow,
   type LoginStep,
   type RuntimeStatus,
+  type BootstrapResult,
 } from '../lib/backend';
 import { startInbox, type InboxController, type InboxRoom } from '../lib/matrix';
 
@@ -34,7 +35,8 @@ type NavMode = 'all' | 'unread' | 'mentions' | 'archive' | 'favorites';
 type ListFilter = 'all' | 'direct' | 'groups' | 'unread' | 'favorites';
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  void error;
+  return 'The operation could not finish. Check your connection and try again.';
 }
 
 function isProvisioningConnector(connector: ConnectorDefinition): boolean {
@@ -46,6 +48,10 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [runtimeError, setRuntimeError] = useState('');
+  const [bootstrap, setBootstrap] = useState<BootstrapResult | null>(null);
+  const setupActive = useRef(false);
+  const startupChecked = useRef(false);
+  const [restartLater, setRestartLater] = useState(false);
   const [rooms, setRooms] = useState<InboxRoom[]>([]);
   const [inbox, setInbox] = useState<InboxController | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -106,7 +112,15 @@ export function App() {
 
   useEffect(() => {
     void backend.registry().then(setRegistry).catch(error => setRuntimeError(errorText(error)));
-    void refreshRuntime().catch(error => setRuntimeError(errorText(error)));
+    if (!startupChecked.current) {
+      startupChecked.current = true;
+      void refreshRuntime().then(async status => {
+        setBootstrap(status.bootstrap ?? null);
+        if (status.platform === 'windows' && (!status.synapse_ready || !status.matrix_session_ready)) {
+          if (status.bootstrap || status.distro_installed) await installRuntime();
+        }
+      }).catch(() => setRuntimeError('Unable to check the local engine. Please retry.'));
+    }
   }, []);
 
   useEffect(() => {
@@ -194,15 +208,20 @@ export function App() {
   }, [activeConnector, loginStep]);
 
   async function installRuntime(): Promise<void> {
+    if (setupActive.current) return;
+    setupActive.current = true;
     setRuntimeBusy(true);
+    setRestartLater(false);
     setRuntimeError('');
     try {
-      await backend.bootstrap();
-      await backend.startRuntime();
-      await refreshRuntime();
+      const result = await backend.bootstrap();
+      setBootstrap(result);
+      if (result.state === 'ERROR') setRuntimeError(result.message);
+      if (result.state === 'RUNTIME_READY') await refreshRuntime();
     } catch (error) {
       setRuntimeError(errorText(error));
     } finally {
+      setupActive.current = false;
       setRuntimeBusy(false);
     }
   }
@@ -400,22 +419,32 @@ export function App() {
           <p className="tagline">All your chats. One box.</p>
           <h2>Set up your private local engine</h2>
           <p>
-            Unibox stores its Matrix database, connector sessions, media and settings on this PC
-            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.
+            Your conversations, connected accounts, media and settings stay on this PC
+            in your private local engine.
           </p>
           <div className="privacyCard">
             <strong>No Unibox cloud account.</strong>
             <span>Your chat database and service sessions are not uploaded to an Unibox server.</span>
           </div>
           {runtimeError && <ErrorBox text={runtimeError} />}
-          <button className="primaryButton" disabled={runtimeBusy} onClick={() => void installRuntime()}>
-            {runtimeBusy ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
-            {runtimeBusy ? 'Installing local engine…' : 'Install local engine'}
-          </button>
-          <small>
-            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
-            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.
-          </small>
+          {bootstrap?.state === 'REBOOT_REQUIRED' && !runtimeBusy ? (
+            <div className="privacyCard" role="status">
+              <strong>Windows is ready to finish setup</strong>
+              <span>Restart Windows once, then reopen Unibox. Setup will continue automatically.</span>
+              <span>Save your work before restarting.</span>
+              <button className="primaryButton" onClick={() => void backend.restartWindows().catch(() => setRuntimeError('Please restart Windows from the Start menu.'))}>Restart now</button>
+              <button onClick={() => setRestartLater(true)}>Restart later</button>
+              {restartLater && <span>You can close Unibox and restart Windows whenever you are ready.</span>}
+            </div>
+          ) : (
+            <>
+              <button className="primaryButton" disabled={runtimeBusy || !runtime} onClick={() => void installRuntime()}>
+                {runtimeBusy ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
+                {runtimeBusy ? 'Preparing local engine…' : 'Install local engine'}
+              </button>
+              <small role="status">{runtimeBusy ? 'Setup may take several minutes. Windows may ask for permission. Keep Unibox open.' : 'Windows may request permission and a one-time restart to prepare your private engine.'}</small>
+            </>
+          )}
         </div>
       </div>
     );

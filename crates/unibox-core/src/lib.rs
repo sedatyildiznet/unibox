@@ -24,6 +24,7 @@ pub struct MatrixSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeStatus {
+    pub bootstrap: Option<BootstrapResult>,
     pub platform: String,
     pub wsl_available: bool,
     pub distro_installed: bool,
@@ -31,6 +32,32 @@ pub struct RuntimeStatus {
     pub synapse_ready: bool,
     pub matrix_session_ready: bool,
     pub data_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BootstrapState {
+    InstallingWsl,
+    RebootRequired,
+    RuntimeInstalling,
+    RuntimeReady,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapResult {
+    pub state: BootstrapState,
+    pub message: String,
+}
+
+pub fn parse_bootstrap_output(text: &str) -> Result<BootstrapResult> {
+    let line = text
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("UNIBOX_BOOTSTRAP:"))
+        .ok_or_else(|| anyhow!("Local engine setup ended unexpectedly. Please retry."))?;
+    serde_json::from_str(line)
+        .context("Local engine returned an invalid setup result. Please retry.")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +146,9 @@ impl RuntimeManager {
         let matrix_session_ready = distro_installed && self.matrix_session().is_ok();
 
         RuntimeStatus {
+            bootstrap: std::fs::read(self.data_root.join("bootstrap-state.json"))
+                .ok()
+                .and_then(|raw| serde_json::from_slice(&raw).ok()),
             platform: std::env::consts::OS.to_string(),
             wsl_available,
             distro_installed,
@@ -129,7 +159,7 @@ impl RuntimeManager {
         }
     }
 
-    pub fn bootstrap(&self, script: &Path) -> Result<String> {
+    pub fn bootstrap(&self, script: &Path) -> Result<BootstrapResult> {
         #[cfg(target_os = "windows")]
         {
             let output = Command::new("powershell.exe")
@@ -139,7 +169,13 @@ impl RuntimeManager {
                 .arg(&self.data_root)
                 .output()
                 .context("failed to start Unibox runtime bootstrap")?;
-            output_text(output, "runtime bootstrap failed")
+            let result = parse_bootstrap_output(&decode_output(&output.stdout))?;
+            if !output.status.success() && !matches!(result.state, BootstrapState::Error) {
+                return Err(anyhow!(
+                    "Local engine setup ended unexpectedly. Please retry."
+                ));
+            }
+            Ok(result)
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -149,6 +185,30 @@ impl RuntimeManager {
                 "managed runtime bootstrap is currently implemented for Windows"
             ))
         }
+    }
+
+    pub fn restart_windows(&self) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            let state: BootstrapResult = serde_json::from_slice(&std::fs::read(
+                self.data_root.join("bootstrap-state.json"),
+            )?)?;
+            if !matches!(state.state, BootstrapState::RebootRequired) {
+                return Err(anyhow!("A Windows restart is not required by setup."));
+            }
+            let output = Command::new("shutdown.exe")
+                .args(["/r", "/t", "0"])
+                .output()
+                .context("Windows could not restart. Please restart from the Start menu.")?;
+            if !output.status.success() {
+                return Err(anyhow!(
+                    "Windows could not restart. Please restart from the Start menu."
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "windows"))]
+        Err(anyhow!("Restart is only available on Windows."))
     }
 
     pub fn start(&self) -> Result<String> {
@@ -211,8 +271,9 @@ impl RuntimeManager {
             id: connector.id.clone(),
             installed,
             running,
-            provisioning_url: (installed && connector.adapter == "bridgev2")
-                .then(|| format!("http://127.0.0.1:{}/_matrix/provision", connector.port)),
+            provisioning_url: (installed
+                && matches!(connector.adapter.as_str(), "bridgev2" | "source-go"))
+            .then(|| format!("http://127.0.0.1:{}/_matrix/provision", connector.port)),
         }
     }
 
@@ -245,7 +306,7 @@ impl RuntimeManager {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        if connector.adapter != "bridgev2" {
+        if connector.adapter != "bridgev2" && connector.adapter != "source-go" {
             return Err(anyhow!(
                 "{} does not use the BridgeV2 provisioning API",
                 connector.name
@@ -440,12 +501,14 @@ impl RuntimeManager {
     fn distro_running(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
-            let out = Command::new("wsl.exe").args(["-l", "-v"]).output();
+            let out = Command::new("wsl.exe")
+                .args(["--list", "--running", "--quiet"])
+                .output();
             out.ok()
                 .map(|o| {
-                    decode_output(&o.stdout).lines().any(|line| {
-                        line.contains(DISTRO_NAME) && line.to_ascii_lowercase().contains("running")
-                    })
+                    decode_output(&o.stdout)
+                        .lines()
+                        .any(|line| line.trim() == DISTRO_NAME)
                 })
                 .unwrap_or(false)
         }
@@ -583,6 +646,23 @@ fn decode_output(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reboot_result_is_not_an_error() {
+        let result = parse_bootstrap_output("noise\nUNIBOX_BOOTSTRAP:{\"state\":\"REBOOT_REQUIRED\",\"message\":\"Restart Windows\"}\n").unwrap();
+        assert!(matches!(result.state, BootstrapState::RebootRequired));
+    }
+
+    #[test]
+    fn bootstrap_requires_a_known_final_result() {
+        assert!(parse_bootstrap_output("PowerShell stack trace").is_err());
+        assert!(parse_bootstrap_output(
+            "UNIBOX_BOOTSTRAP:{\"state\":\"UNKNOWN\",\"message\":\"x\"}"
+        )
+        .is_err());
+        let result = parse_bootstrap_output("UNIBOX_BOOTSTRAP:{\"state\":\"RUNTIME_INSTALLING\",\"message\":\"Preparing\"}\nUNIBOX_BOOTSTRAP:{\"state\":\"ERROR\",\"message\":\"Retry\"}").unwrap();
+        assert!(matches!(result.state, BootstrapState::Error));
+    }
 
     #[test]
     fn remote_url_policy_blocks_local_targets() {

@@ -38,6 +38,12 @@ jobs:
             [ref]$errors
           )
           if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
+      - name: Test Windows PowerShell 5.1 bootstrap lifecycle
+        shell: powershell
+        run: ./scripts/test-bootstrap.ps1
+      - name: Test modern PowerShell bootstrap lifecycle
+        shell: pwsh
+        run: ./scripts/test-bootstrap.ps1
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - run: pnpm check

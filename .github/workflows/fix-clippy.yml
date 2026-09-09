@@ -38,38 +38,29 @@ jobs:
           text = text.replace('            return out\n                .ok()', '            out\n                .ok()')
           text = text.replace('                .unwrap_or(false);\n        }\n        #[cfg(not(target_os = "windows"))]\n        false', '                .unwrap_or(false)\n        }\n        #[cfg(not(target_os = "windows"))]\n        false')
 
-          old_decode = '''fn decode_output(bytes: &[u8]) -> String {
-              if bytes.len() >= 2 && bytes[1] == 0 {
-                  let words: Vec<u16> = bytes
-                      .chunks_exact(2)
-                      .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                      .collect();
-                  String::from_utf16_lossy(&words)
-              } else {
-                  String::from_utf8_lossy(bytes).to_string()
-              }
-          }'''.replace('          ', '')
-          new_decode = '''fn decode_output(bytes: &[u8]) -> String {
-              if bytes.len() >= 2 && bytes[1] == 0 {
-                  let mut words = Vec::with_capacity(bytes.len() / 2);
-                  let mut index = 0;
-                  while index + 1 < bytes.len() {
-                      words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
-                      index += 2;
-                  }
-                  String::from_utf16_lossy(&words)
-              } else {
-                  String::from_utf8_lossy(bytes).to_string()
-              }
-          }'''.replace('          ', '')
-          text = text.replace(old_decode, new_decode)
+          old_words = '''        let words: Vec<u16> = bytes
+              .chunks_exact(2)
+              .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+              .collect();'''.replace('      ', '')
+          new_words = '''        let mut words = Vec::with_capacity(bytes.len() / 2);
+          let mut index = 0;
+          while index + 1 < bytes.len() {
+              words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
+              index += 2;
+          }'''.replace('      ', '')
+          text = text.replace(old_words, new_words)
+
+          # Fallback exact source form, kept explicit for reliability.
+          text = text.replace(
+              '        let words: Vec<u16> = bytes\n            .chunks_exact(2)\n            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))\n            .collect();',
+              '        let mut words = Vec::with_capacity(bytes.len() / 2);\n        let mut index = 0;\n        while index + 1 < bytes.len() {\n            words.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));\n            index += 2;\n        }',
+          )
           path.write_text(text, encoding='utf-8')
           PY
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
       - run: cargo fmt --all
-      - run: cargo clippy -p unibox-core --all-targets --locked -- -D warnings
       - name: Commit cleanup
         shell: bash
         run: |

@@ -7,6 +7,7 @@ ETC=/etc/unibox
 STATE=/var/lib/unibox
 MEDIA=$STATE/media
 LOG=/var/log/unibox
+SYNAPSE_VERSION=1.160.0
 
 apt-get update -qq
 apt-get install -y --no-install-recommends \
@@ -26,7 +27,7 @@ if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --disable-pip-version-check --upgrade pip wheel setuptools >/dev/null
-"$VENV/bin/pip" install --disable-pip-version-check 'matrix-synapse[postgres]' >/dev/null
+"$VENV/bin/pip" install --disable-pip-version-check "matrix-synapse[postgres]==$SYNAPSE_VERSION" >/dev/null
 
 systemctl enable postgresql >/dev/null
 systemctl start postgresql
@@ -239,5 +240,16 @@ config['app_service_config_files'] = [p for p in (config.get('app_service_config
 config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 PY
 chmod 0755 /opt/unibox/bin/unibox-appservice-unregister
+
+OS_PRETTY=$(awk -F= '$1=="PRETTY_NAME" {gsub(/^"|"$/, "", $2); print $2}' /etc/os-release)
+POSTGRES_VERSION=$(psql --version | awk '{print $3}')
+umask 077
+jq -n \
+  --arg synapse "$SYNAPSE_VERSION" \
+  --arg postgres "$POSTGRES_VERSION" \
+  --arg os "$OS_PRETTY" \
+  '{synapse:$synapse,postgres:$postgres,os:$os}' > "$STATE/runtime-version.json"
+chown unibox:unibox "$STATE/runtime-version.json"
+chmod 0600 "$STATE/runtime-version.json"
 
 printf 'Unibox local runtime provisioned successfully.\n'

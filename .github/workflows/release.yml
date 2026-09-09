@@ -1,19 +1,48 @@
 name: Release
+
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+
 permissions:
   contents: write
+
 jobs:
   release-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm }
+        with:
+          node-version: 22
+
       - uses: dtolnay/rust-toolchain@stable
-      - run: pnpm install --frozen-lockfile=false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Verify connector registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/verify-registry.py
+
+      - name: Verify updater signing configuration
+        shell: pwsh
+        run: |
+          $config = Get-Content 'apps/desktop/src-tauri/tauri.conf.json' -Raw
+          if ($config -match 'REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY') {
+            Write-Error 'Updater public key is not configured. Generate the Tauri signing key, store the private key/password as GitHub Actions secrets, and commit only the public key to tauri.conf.json.'
+            exit 1
+          }
+          if (-not '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}') {
+            Write-Error 'TAURI_SIGNING_PRIVATE_KEY secret is missing.'
+            exit 1
+          }
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

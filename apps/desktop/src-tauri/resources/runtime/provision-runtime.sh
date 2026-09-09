@@ -118,7 +118,10 @@ app_service_config_files: []
 EOF
 
 chown -R unibox:unibox "$STATE" "$LOG"
-chmod 0600 "$ETC/registration.secret" "$ETC/unibox.local.signing.key"
+chown root:unibox "$ETC/unibox.local.signing.key" "$ETC/homeserver.yaml" "$ETC/log.config"
+chmod 0640 "$ETC/unibox.local.signing.key" "$ETC/homeserver.yaml"
+chmod 0644 "$ETC/log.config"
+chmod 0600 "$ETC/registration.secret"
 
 cat > /etc/systemd/system/unibox-synapse.service <<EOF
 [Unit]
@@ -178,8 +181,29 @@ if [ ! -s "$STATE/matrix.json" ]; then
     --arg device_id "$DEVICE_ID" \
     '{homeserver:$homeserver,user_id:$user_id,access_token:$access_token,device_id:$device_id}' \
     > "$STATE/matrix.json"
+  chown unibox:unibox "$STATE/matrix.json"
   chmod 0600 "$STATE/matrix.json"
 fi
+
+# The shared registration secret is only needed to create the local account.
+# Remove it from the live Synapse configuration after bootstrap so connectors
+# cannot use it to create additional local accounts.
+"$VENV/bin/python" - <<'PY'
+from pathlib import Path
+import yaml
+path = Path('/etc/unibox/homeserver.yaml')
+cfg = yaml.safe_load(path.read_text())
+cfg.pop('registration_shared_secret', None)
+path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+PY
+chown root:unibox "$ETC/homeserver.yaml"
+chmod 0640 "$ETC/homeserver.yaml"
+systemctl restart unibox-synapse
+for _ in $(seq 1 30); do
+  curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null
 
 cat > /opt/unibox/bin/unibox-appservice-register <<'PY'
 #!/opt/unibox/synapse-venv/bin/python

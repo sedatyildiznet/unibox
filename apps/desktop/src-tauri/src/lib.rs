@@ -162,7 +162,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_root = normalize_windows_path(app.path().app_local_data_dir()?.join("runtime"));
+            let data_root =
+                normalize_windows_path(app.path().app_local_data_dir()?.join("runtime"));
             let runtime = RuntimeManager::new(data_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;
             app.manage(AppState { runtime, registry });

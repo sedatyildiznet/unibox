@@ -15,6 +15,7 @@ checks = {
     'bootstrap imports WSL2 runtime': '--version 2' in BOOTSTRAP,
     'bootstrap verifies SHA-256': 'Get-FileHash -Algorithm SHA256' in BOOTSTRAP,
     'bootstrap starts managed Synapse service': 'postgresql unibox-synapse' in BOOTSTRAP,
+    'bootstrap can request WSL installation': "--install', '--no-distribution'" in BOOTSTRAP,
     'provision pins Synapse version': 'SYNAPSE_VERSION=1.160.0' in PROVISION,
     'Synapse client listener is loopback only': "bind_addresses: ['127.0.0.1']" in PROVISION,
     'public registration stays disabled': 'enable_registration: false' in PROVISION,
@@ -22,6 +23,10 @@ checks = {
     'Synapse systemd service is sandboxed': 'ProtectSystem=strict' in PROVISION and 'NoNewPrivileges=true' in PROVISION,
     'connector services depend on managed Synapse': 'Requires=unibox-synapse.service postgresql.service' in CONNECTOR,
     'connector services are sandboxed': 'ProtectSystem=strict' in CONNECTOR and 'NoNewPrivileges=true' in CONNECTOR,
+    'bad appservice registration is rolled back': 'unibox-appservice-unregister "$target"' in CONNECTOR and 'rolled back safely' in CONNECTOR,
+    'binary connector update supports rollback': 'update failed and was rolled back' in CONNECTOR,
+    'source connector update supports rollback': 'source update failed and was rolled back' in CONNECTOR,
+    'Google Chat update uses atomic venv rollback': 'update_python_googlechat()' in CONNECTOR and 'Python connector update failed and was rolled back' in CONNECTOR,
     'desktop updater uses GitHub Releases': 'https://github.com/sedatyildiznet/unibox/releases/latest/download/latest.json' in TAURI,
 }
 

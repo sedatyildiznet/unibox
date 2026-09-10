@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - native-runtime
+    paths:
+      - '.github/workflows/native-runtime-probe.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-runtime-probe-${{ github.sha }}
-  cancel-in-progress: false
+  group: native-runtime-probe
+  cancel-in-progress: true
 
 jobs:
   tuwunel-windows:

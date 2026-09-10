@@ -4,7 +4,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
 $ProgressPreference = 'SilentlyContinue'
+$script:SetupLock = $null
 
 $Distro = 'UniboxRuntime'
 $BaseUrl = 'https://cloud-images.ubuntu.com/wsl/releases/noble/current'
@@ -38,13 +41,40 @@ function Invoke-WslProbe {
     return $exitCode
 }
 
+function Invoke-WslCommand {
+    param([string[]]$Arguments, [string]$InputText)
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        if ($PSBoundParameters.ContainsKey('InputText')) {
+            $InputText | & wsl.exe @Arguments *> $null
+        } else {
+            & wsl.exe @Arguments *> $null
+        }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) { throw "Local engine command failed (exit code $exitCode)." }
+}
+
+function Write-BootstrapState([string]$State, [string]$Message) {
+    $result = [ordered]@{ state = $State; message = $Message; boot_id = $script:BootId }
+    $json = $result | ConvertTo-Json -Compress
+    $temporary = Join-Path $DataRoot 'bootstrap-state.tmp'
+    [IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $temporary -Destination (Join-Path $DataRoot 'bootstrap-state.json') -Force
+    [Console]::WriteLine("UNIBOX_BOOTSTRAP:$json")
+}
+
 function Request-WslInstall {
-    Write-Output 'WSL2 is not ready. Requesting Windows elevation to enable it...'
+    Write-BootstrapState 'INSTALLING_WSL' 'Preparing Windows. Please approve the Windows permission request.'
     $process = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--install', '--no-distribution') -Verb RunAs -Wait -PassThru
-    if ($process.ExitCode -ne 0) {
+    if ($process.ExitCode -notin @(0, 3010, 1641)) {
         throw "Windows could not enable WSL2 automatically (exit code $($process.ExitCode))."
     }
-    throw 'WSL2 was enabled. Restart Windows once, then reopen Unibox to finish installing the local engine.'
+    Write-BootstrapState 'REBOOT_REQUIRED' 'Windows needs to restart once. Reopen Unibox afterward to continue automatically.'
+    return $false
 }
 
 function Ensure-Wsl {
@@ -53,12 +83,13 @@ function Ensure-Wsl {
     }
 
     if ((Invoke-WslProbe -Arguments @('--status')) -ne 0) {
-        Request-WslInstall
+        return (Request-WslInstall)
     }
 
     if ((Invoke-WslProbe -Arguments @('--set-default-version', '2')) -ne 0) {
         throw 'WSL is installed, but WSL2 could not be selected as the default runtime. Ensure virtualization is enabled and restart Windows.'
     }
+    return $true
 }
 
 function Test-DistroExists {
@@ -96,8 +127,13 @@ function Download-Rootfs {
     }
 
     if (-not $validExisting) {
-        Remove-Item $RootfsPath -Force -ErrorAction SilentlyContinue
-        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$RootfsName" -OutFile $RootfsPath
+        $partial = "$RootfsPath.partial"
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$RootfsName" -OutFile $partial
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $partial).Hash.ToLowerInvariant() -ne $expected) {
+            Remove-Item -LiteralPath $partial -Force
+            throw 'Ubuntu rootfs SHA-256 verification failed.'
+        }
+        Move-Item -LiteralPath $partial -Destination $RootfsPath -Force
     }
 
     $actual = (Get-FileHash -Algorithm SHA256 -Path $RootfsPath).Hash.ToLowerInvariant()
@@ -109,59 +145,65 @@ function Download-Rootfs {
 
 function Import-Runtime {
     New-Item -ItemType Directory -Force -Path $DistroDir | Out-Null
-    & wsl.exe --import $Distro $DistroDir $RootfsPath --version 2
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to import the UniboxRuntime WSL distribution.'
-    }
+    Invoke-WslCommand -Arguments @('--import', $Distro, $DistroDir, $RootfsPath, '--version', '2')
+}
 
-    & wsl.exe -d $Distro -- bash -lc "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf"
-    if ($LASTEXITCODE -ne 0) {
-        $previousErrorActionPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & wsl.exe --unregister $Distro *> $null
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-        throw 'Failed to configure systemd in UniboxRuntime.'
-    }
-    & wsl.exe --terminate $Distro | Out-Null
-    Start-Sleep -Milliseconds 800
+function Enable-RuntimeSystemd {
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf")
+    $null = Invoke-WslProbe -Arguments @('--terminate', $Distro)
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'for i in $(seq 1 30); do systemctl list-units --no-pager >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1')
 }
 
 function Invoke-LinuxScript([string]$Path) {
-    $content = Get-Content -Raw -Encoding UTF8 $Path
-    $content | & wsl.exe -d $Distro -- bash -s
-    if ($LASTEXITCODE -ne 0) {
-        throw "Runtime provisioning script failed: $Path"
+    $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-s') -InputText $content
+}
+
+try {
+    New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
+    $script:SetupLock = [IO.File]::Open((Join-Path $DataRoot 'bootstrap.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+    $script:BootId = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
+    $statePath = Join-Path $DataRoot 'bootstrap-state.json'
+    if (Test-Path -LiteralPath $statePath) {
+        try { $previous = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json }
+        catch { $previous = $null }
+        if ($previous.state -eq 'REBOOT_REQUIRED' -and $previous.boot_id -eq $script:BootId) {
+            Write-BootstrapState 'REBOOT_REQUIRED' 'Windows needs to restart once. Reopen Unibox afterward to continue automatically.'
+            exit 0
+        }
     }
+    if (-not (Ensure-Wsl)) { exit 0 }
+    Write-BootstrapState 'RUNTIME_INSTALLING' 'Preparing your private local engine. This can take several minutes.'
+
+    if (-not (Test-DistroExists)) {
+        $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($DataRoot))
+        if ($drive.AvailableFreeSpace -lt 8GB) { throw 'At least 8 GB of free space is required.' }
+        Download-Rootfs
+        Import-Runtime
+    }
+
+    Enable-RuntimeSystemd
+
+    $ProvisionScript = Join-Path $PSScriptRoot 'provision-runtime.sh'
+    $ConnectorScript = Join-Path $PSScriptRoot 'unibox-connector.sh'
+    if (-not (Test-Path $ProvisionScript)) { throw 'Missing provision-runtime.sh resource.' }
+    if (-not (Test-Path $ConnectorScript)) { throw 'Missing unibox-connector.sh resource.' }
+
+    Invoke-LinuxScript $ProvisionScript
+
+    $connectorContent = Get-Content -Raw -Encoding UTF8 $ConnectorScript
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'cat > /opt/unibox/bin/unibox-connector && chmod 0755 /opt/unibox/bin/unibox-connector') -InputText $connectorContent
+    Invoke-WslCommand -Arguments @('-d', $Distro, '--', 'bash', '-lc', 'systemctl enable --now postgresql unibox-synapse >/dev/null && systemctl is-active --quiet postgresql unibox-synapse')
+
+    Write-BootstrapState 'RUNTIME_READY' 'Your private local engine is ready.'
 }
-
-Ensure-Wsl
-New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
-
-if (-not (Test-DistroExists)) {
-    Download-Rootfs
-    Import-Runtime
+catch {
+    # Never return native output, paths, session material or PowerShell stacks to the UI.
+    $message = 'Local engine setup could not finish. Check your connection, available disk space and Windows virtualization settings, then retry.'
+    if ($script:SetupLock) { Write-BootstrapState 'ERROR' $message }
+    else { [Console]::WriteLine('UNIBOX_BOOTSTRAP:{"state":"ERROR","message":"Setup is already running or its data folder is unavailable. Close other Unibox windows and retry."}') }
+    exit 1
 }
-
-$ProvisionScript = Join-Path $PSScriptRoot 'provision-runtime.sh'
-$ConnectorScript = Join-Path $PSScriptRoot 'unibox-connector.sh'
-if (-not (Test-Path $ProvisionScript)) { throw 'Missing provision-runtime.sh resource.' }
-if (-not (Test-Path $ConnectorScript)) { throw 'Missing unibox-connector.sh resource.' }
-
-Invoke-LinuxScript $ProvisionScript
-
-$connectorContent = Get-Content -Raw -Encoding UTF8 $ConnectorScript
-$connectorContent | & wsl.exe -d $Distro -- bash -lc 'cat > /opt/unibox/bin/unibox-connector && chmod 0755 /opt/unibox/bin/unibox-connector'
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to install Unibox connector manager.'
+finally {
+    if ($script:SetupLock) { $script:SetupLock.Dispose() }
 }
-
-& wsl.exe -d $Distro -- bash -lc 'systemctl enable --now postgresql unibox-synapse >/dev/null && systemctl is-active --quiet postgresql unibox-synapse'
-if ($LASTEXITCODE -ne 0) {
-    throw 'Unibox local services did not become healthy.'
-}
-
-Write-Output 'UniboxRuntime is installed and healthy.'

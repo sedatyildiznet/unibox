@@ -6,7 +6,6 @@ import {
   Download,
   Inbox,
   LoaderCircle,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -17,6 +16,10 @@ import {
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { isPermissionGranted, requestPermission, sendNotification, onAction } from '@tauri-apps/plugin-notification';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
+import { confirm, open, save } from '@tauri-apps/plugin-dialog';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import {
@@ -27,14 +30,17 @@ import {
   type LoginFlow,
   type LoginStep,
   type RuntimeStatus,
+  type BootstrapResult,
+  type DesktopPreferences,
 } from '../lib/backend';
-import { startInbox, type InboxController, type InboxRoom } from '../lib/matrix';
+import { startInbox, type InboxController, type InboxRoom, type InboxMessage } from '../lib/matrix';
 
 type NavMode = 'all' | 'unread' | 'mentions' | 'archive' | 'favorites';
 type ListFilter = 'all' | 'direct' | 'groups' | 'unread' | 'favorites';
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  void error;
+  return 'The operation could not finish. Check your connection and try again.';
 }
 
 function isProvisioningConnector(connector: ConnectorDefinition): boolean {
@@ -46,6 +52,10 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [runtimeError, setRuntimeError] = useState('');
+  const [bootstrap, setBootstrap] = useState<BootstrapResult | null>(null);
+  const setupActive = useRef(false);
+  const startupChecked = useRef(false);
+  const [restartLater, setRestartLater] = useState(false);
   const [rooms, setRooms] = useState<InboxRoom[]>([]);
   const [inbox, setInbox] = useState<InboxController | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -54,18 +64,34 @@ export function App() {
   const [listFilter, setListFilter] = useState<ListFilter>('all');
   const [serviceFilter, setServiceFilter] = useState<string | null>(null);
   const [composer, setComposer] = useState('');
+  const [reply, setReply] = useState<InboxMessage | null>(null);
+  const [editing, setEditing] = useState<InboxMessage | null>(null);
+  const [sending, setSending] = useState(false);
+  const attachmentRef = useRef<HTMLInputElement>(null);
+  const lastTyping = useRef(0);
+  useEffect(() => { setReply(null); setEditing(null); setComposer(''); }, [selectedRoomId]);
   const [showServices, setShowServices] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [connectorStatuses, setConnectorStatuses] = useState<Record<string, ConnectorStatus>>({});
+  const [connectorLogins, setConnectorLogins] = useState<Record<string, string[]>>({});
   const [settingsBusyId, setSettingsBusyId] = useState<string | null>(null);
+  const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
   const [activeConnector, setActiveConnector] = useState<ConnectorDefinition | null>(null);
   const [connectorBusy, setConnectorBusy] = useState(false);
   const [connectorError, setConnectorError] = useState('');
   const [flows, setFlows] = useState<LoginFlow[]>([]);
   const [loginStep, setLoginStep] = useState<LoginStep | null>(null);
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
+  const [reloginId, setReloginId] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
+  const [desktopPreferences, setDesktopPreferences] = useState<DesktopPreferences>({ close_to_tray: false, run_at_startup: false, start_minimized: false });
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
+  const [version, setVersion] = useState('');
+  const [notifications, setNotifications] = useState(localStorage.getItem('unibox.notifications') === 'true');
+  const notificationEnabled = useRef(notifications);
+  notificationEnabled.current = notifications;
   const searchRef = useRef<HTMLInputElement>(null);
 
   const visibleRooms = useMemo(() => {
@@ -90,7 +116,7 @@ export function App() {
     return next;
   }, [rooms, navMode, listFilter, serviceFilter, query]);
 
-  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? visibleRooms[0] ?? rooms[0];
+  const selectedRoom = rooms.find(room => room.id === selectedRoomId) ?? visibleRooms[0];
   const networks = [...new Set(rooms.map(room => room.service))].sort();
   const allCount = rooms.filter(room => !room.archived).length;
   const unreadCount = rooms.filter(room => !room.archived && room.unread > 0).length;
@@ -105,8 +131,23 @@ export function App() {
   }
 
   useEffect(() => {
+    void backend.desktopPreferences().then(setDesktopPreferences).catch(() => undefined);
+    void getVersion().then(setVersion).catch(() => undefined);
     void backend.registry().then(setRegistry).catch(error => setRuntimeError(errorText(error)));
-    void refreshRuntime().catch(error => setRuntimeError(errorText(error)));
+    if (!startupChecked.current) {
+      startupChecked.current = true;
+      void backend.status().then(async status => {
+        setRuntime({ ...status, synapse_ready: false, matrix_session_ready: false });
+        setBootstrap(status.bootstrap ?? null);
+        if (status.platform === 'windows') {
+          if (status.distro_installed && (!status.bootstrap || status.bootstrap.state === 'RUNTIME_READY')) {
+            setRuntimeBusy(true);
+            try { await backend.startRuntime(); await refreshRuntime(); }
+            finally { setRuntimeBusy(false); }
+          } else if (status.bootstrap || status.distro_installed) await installRuntime();
+        }
+      }).catch(() => setRuntimeError('Unable to check the local engine. Please retry.'));
+    }
   }, []);
 
   useEffect(() => {
@@ -118,6 +159,10 @@ export function App() {
       .matrixSession()
       .then(session => startInbox(session, nextRooms => {
         if (!disposed) setRooms(nextRooms);
+      }, (roomId, name) => {
+        if (!disposed && notificationEnabled.current && !document.hasFocus()) {
+          sendNotification({ title: name, body: 'New message in Unibox', extra: { roomId } });
+        }
       }))
       .then(next => {
         if (disposed) {
@@ -137,6 +182,62 @@ export function App() {
       setInbox(null);
     };
   }, [runtime?.synapse_ready, runtime?.matrix_session_ready]);
+
+  useEffect(() => {
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void onAction(notification => {
+      const roomId = notification.extra?.roomId;
+      if (typeof roomId === 'string') {
+        setSelectedRoomId(roomId);
+        void getCurrentWindow().show().then(() => getCurrentWindow().unminimize()).then(() => getCurrentWindow().setFocus()).catch(() => undefined);
+      }
+    }).then(listener => { if (disposed) void listener.unregister(); else cleanup = () => { void listener.unregister(); }; }).catch(() => undefined);
+    return () => { disposed = true; cleanup?.(); };
+  }, []);
+
+  async function updateDesktopPreference(key: keyof DesktopPreferences, value: boolean): Promise<void> {
+    const next = { ...desktopPreferences, [key]: value };
+    try { await backend.saveDesktopPreferences(next); setDesktopPreferences(next); }
+    catch { setMaintenanceMessage('This desktop preference could not be saved.'); }
+  }
+
+  async function runMaintenance(operation: 'backup' | 'restore'): Promise<void> {
+    if (maintenanceBusy) return;
+    setMaintenanceMessage('');
+    try {
+      const filters = [{ name: 'Unibox backup', extensions: ['uniboxbackup'] }];
+      const selected = operation === 'backup'
+        ? await save({ defaultPath: `Unibox-${new Date().toISOString().slice(0, 10)}.uniboxbackup`, filters })
+        : await open({ multiple: false, directory: false, filters });
+      if (!selected || typeof selected !== 'string') return;
+      const approved = await confirm(operation === 'backup'
+        ? 'Your backup includes account sessions and private messages. It is not encrypted. Keep it in a private location. Messaging will pause briefly.'
+        : 'Restore a backup you created and trust. Current messages and account sessions will be replaced. Matching engine and connector versions are required. Unibox will restart afterward.',
+        { title: operation === 'backup' ? 'Create private backup' : 'Restore local data', kind: 'warning' });
+      if (!approved) return;
+      setMaintenanceBusy(true);
+      await backend.maintenance(operation, selected);
+      if (operation === 'restore') await relaunch();
+      else setMaintenanceMessage('Backup saved. Keep this file private.');
+    } catch { setMaintenanceMessage('Maintenance could not finish. Check free space, engine health and matching backup versions.'); }
+    finally { setMaintenanceBusy(false); }
+  }
+
+  async function exportDiagnostics(): Promise<void> {
+    try {
+      const selected = await save({ defaultPath: 'Unibox-diagnostics.json', filters: [{ name: 'Diagnostic report', extensions: ['json'] }] });
+      if (selected) { await backend.exportDiagnostics(selected); setMaintenanceMessage('Diagnostic report saved without tokens, sessions or raw logs.'); }
+    } catch { setMaintenanceMessage('The diagnostic report could not be saved.'); }
+  }
+
+  async function toggleNotifications(): Promise<void> {
+    if (notifications) { setNotifications(false); localStorage.setItem('unibox.notifications', 'false'); return; }
+    try {
+      const granted = await isPermissionGranted() || await requestPermission() === 'granted';
+      setNotifications(granted); localStorage.setItem('unibox.notifications', String(granted));
+    } catch { setRuntimeError('Windows notifications could not be enabled.'); }
+  }
 
   useEffect(() => {
     if (!selectedRoomId && visibleRooms[0]) setSelectedRoomId(visibleRooms[0].id);
@@ -194,15 +295,20 @@ export function App() {
   }, [activeConnector, loginStep]);
 
   async function installRuntime(): Promise<void> {
+    if (setupActive.current) return;
+    setupActive.current = true;
     setRuntimeBusy(true);
+    setRestartLater(false);
     setRuntimeError('');
     try {
-      await backend.bootstrap();
-      await backend.startRuntime();
-      await refreshRuntime();
+      const result = await backend.bootstrap();
+      setBootstrap(result);
+      if (result.state === 'ERROR') setRuntimeError(result.message);
+      if (result.state === 'RUNTIME_READY') await refreshRuntime();
     } catch (error) {
       setRuntimeError(errorText(error));
     } finally {
+      setupActive.current = false;
       setRuntimeBusy(false);
     }
   }
@@ -231,7 +337,21 @@ export function App() {
     const entries = await Promise.all(
       registry.map(async connector => [connector.id, await backend.connectorStatus(connector.id)] as const),
     );
-    setConnectorStatuses(Object.fromEntries(entries));
+    const statuses: Record<string, ConnectorStatus> = Object.fromEntries(entries);
+    setConnectorStatuses(statuses);
+
+    const loginEntries = await Promise.all(registry.map(async connector => {
+      const status = statuses[connector.id];
+      if (!isProvisioningConnector(connector) || !status?.installed || !status.running) {
+        return [connector.id, []] as const;
+      }
+      try {
+        return [connector.id, await backend.connectorLogins(connector.id)] as const;
+      } catch {
+        return [connector.id, []] as const;
+      }
+    }));
+    setConnectorLogins(Object.fromEntries(loginEntries));
   }
 
   async function openSettings(): Promise<void> {
@@ -261,6 +381,7 @@ export function App() {
   async function connectService(connector: ConnectorDefinition): Promise<void> {
     setActiveConnector(connector);
     setShowServices(false);
+    setReloginId(null);
     setConnectorBusy(true);
     setConnectorError('');
     setFlows([]);
@@ -276,14 +397,9 @@ export function App() {
       if (!status.running) await backend.startConnector(connector.id);
 
       if (isProvisioningConnector(connector)) {
-        const response = await backend.provision<{ flows: LoginFlow[] }>(
-          connector.id,
-          'GET',
-          '/v3/login/flows',
-        );
-        const nextFlows = response.flows ?? [];
+        const nextFlows = await backend.connectorLoginFlows(connector.id);
         setFlows(nextFlows);
-        if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
+        if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0], null);
       } else {
         await beginLegacyLogin(connector);
       }
@@ -294,22 +410,79 @@ export function App() {
     }
   }
 
-  async function beginFlow(connector: ConnectorDefinition, flow: LoginFlow): Promise<void> {
+  async function beginFlow(connector: ConnectorDefinition, flow: LoginFlow, existingLoginId?: string | null): Promise<void> {
     setConnectorBusy(true);
     setConnectorError('');
     try {
-      const step = await backend.provision<LoginStep>(
-        connector.id,
-        'POST',
-        `/v3/login/start/${encodeURIComponent(flow.id)}?client_http=1`,
-        {},
-      );
+      const step = await backend.startConnectorLogin(connector.id, flow.id, existingLoginId);
       setLoginValues({});
       setLoginStep(step);
     } catch (error) {
       setConnectorError(errorText(error));
     } finally {
       setConnectorBusy(false);
+    }
+  }
+
+  async function reconnectConnectorLogin(connector: ConnectorDefinition, loginId: string): Promise<void> {
+    setShowSettings(false);
+    setActiveConnector(connector);
+    setReloginId(loginId);
+    setConnectorBusy(true);
+    setConnectorError('');
+    setFlows([]);
+    setLoginStep(null);
+    setLoginValues({});
+    try {
+      const status = await backend.connectorStatus(connector.id);
+      if (!status.running) await backend.startConnector(connector.id);
+      const nextFlows = await backend.connectorLoginFlows(connector.id);
+      setFlows(nextFlows);
+      if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0], loginId);
+      if (nextFlows.length === 0) setConnectorError('This connector does not currently offer a re-login flow.');
+    } catch (error) {
+      setConnectorError(errorText(error));
+    } finally {
+      setConnectorBusy(false);
+    }
+  }
+
+  async function logoutConnectorLogin(connector: ConnectorDefinition, loginId: string): Promise<void> {
+    const approved = await confirm(
+      `Log out ${loginId} from ${connector.name}? The local connector session for this account will be removed.`,
+      { title: 'Log out account', kind: 'warning' },
+    );
+    if (!approved) return;
+    const busyId = `${connector.id}:${loginId}`;
+    setAccountBusyId(busyId);
+    setRuntimeError('');
+    try {
+      await backend.logoutConnectorLogin(connector.id, loginId);
+      await refreshConnectorStatuses();
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    } finally {
+      setAccountBusyId(null);
+    }
+  }
+
+  async function closeConnectorLogin(): Promise<void> {
+    const connector = activeConnector;
+    const step = loginStep;
+    const returnToSettings = reloginId !== null;
+    setActiveConnector(null);
+    setFlows([]);
+    setLoginStep(null);
+    setLoginValues({});
+    setReloginId(null);
+    setConnectorError('');
+    if (connector && step && step.type !== 'complete' && step.login_id) {
+      try { await backend.cancelConnectorLogin(connector.id, step.login_id); }
+      catch { /* Best effort: a provider may already have completed or expired the flow. */ }
+    }
+    if (returnToSettings) {
+      setShowSettings(true);
+      try { await refreshConnectorStatuses(); } catch { /* Settings can still open with the last known state. */ }
     }
   }
 
@@ -360,16 +533,43 @@ export function App() {
   }
 
   async function sendMessage(): Promise<void> {
-    if (!inbox || !selectedRoom || !composer.trim()) return;
+    if (!inbox || !selectedRoom || !composer.trim() || sending) return;
     const text = composer;
+    setSending(true);
     setComposer('');
     try {
-      await inbox.sendText(selectedRoom.id, text);
+      if (editing) await inbox.editMessage(selectedRoom.id, editing.id, text);
+      else await inbox.sendText(selectedRoom.id, text, reply?.id);
+      setReply(null);
+      setEditing(null);
       await inbox.markRead(selectedRoom.id);
     } catch (error) {
       setRuntimeError(errorText(error));
       setComposer(text);
-    }
+    } finally { setSending(false); }
+  }
+
+  async function sendAttachment(file?: File): Promise<void> {
+    if (!file || !inbox || !selectedRoom || sending) return;
+    if (file.size > 25 * 1024 * 1024) { setRuntimeError('Attachments must be 25 MB or smaller.'); return; }
+    setSending(true);
+    try { await inbox.sendAttachment(selectedRoom.id, file); }
+    catch { setRuntimeError('The attachment could not be sent. Please retry.'); }
+    finally { setSending(false); if (attachmentRef.current) attachmentRef.current.value = ''; }
+  }
+
+  async function downloadAttachment(message: InboxMessage): Promise<void> {
+    if (!inbox || !message.url) return;
+    try {
+      const blob = await inbox.downloadMedia(message.url);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = message.body || 'attachment';
+      document.body.appendChild(link);
+      link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { setRuntimeError('The attachment could not be downloaded. Please retry.'); }
   }
 
   async function toggleFavorite(): Promise<void> {
@@ -400,22 +600,32 @@ export function App() {
           <p className="tagline">All your chats. One box.</p>
           <h2>Set up your private local engine</h2>
           <p>
-            Unibox stores its Matrix database, connector sessions, media and settings on this PC
-            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.
+            Your conversations, connected accounts, media and settings stay on this PC
+            in your private local engine.
           </p>
           <div className="privacyCard">
             <strong>No Unibox cloud account.</strong>
             <span>Your chat database and service sessions are not uploaded to an Unibox server.</span>
           </div>
           {runtimeError && <ErrorBox text={runtimeError} />}
-          <button className="primaryButton" disabled={runtimeBusy} onClick={() => void installRuntime()}>
-            {runtimeBusy ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
-            {runtimeBusy ? 'Installing local engine…' : 'Install local engine'}
-          </button>
-          <small>
-            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
-            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.
-          </small>
+          {bootstrap?.state === 'REBOOT_REQUIRED' && !runtimeBusy ? (
+            <div className="privacyCard" role="status">
+              <strong>Windows is ready to finish setup</strong>
+              <span>Restart Windows once, then reopen Unibox. Setup will continue automatically.</span>
+              <span>Save your work before restarting.</span>
+              <button className="primaryButton" onClick={() => void backend.restartWindows().catch(() => setRuntimeError('Please restart Windows from the Start menu.'))}>Restart now</button>
+              <button onClick={() => setRestartLater(true)}>Restart later</button>
+              {restartLater && <span>You can close Unibox and restart Windows whenever you are ready.</span>}
+            </div>
+          ) : (
+            <>
+              <button className="primaryButton" disabled={runtimeBusy || !runtime} onClick={() => void installRuntime()}>
+                {runtimeBusy ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
+                {runtimeBusy ? 'Preparing local engine…' : 'Install local engine'}
+              </button>
+              <small role="status">{runtimeBusy ? 'Setup may take several minutes. Windows may ask for permission. Keep Unibox open.' : 'Windows may request permission and a one-time restart to prepare your private engine.'}</small>
+            </>
+          )}
         </div>
       </div>
     );
@@ -494,39 +704,54 @@ export function App() {
             <header>
               <div><h2>{selectedRoom.name}</h2><span>{selectedRoom.service}{selectedRoom.unread > 0 ? ` · ${selectedRoom.unread} unread` : ''}</span></div>
               <div className="headerActions">
+                <button title={selectedRoom.muted ? 'Unmute notifications' : 'Mute notifications'} onClick={() => void inbox?.toggleMuted(selectedRoom.id, !selectedRoom.muted).catch(() => setRuntimeError('Notification preference could not be saved.'))}>{selectedRoom.muted ? 'Unmute' : 'Mute'}</button>
                 <button title={selectedRoom.favorite ? 'Remove from favorites' : 'Add to favorites'} className={selectedRoom.favorite ? 'selectedAction' : ''} onClick={() => void toggleFavorite()}><Star size={18} /></button>
                 <button title={selectedRoom.archived ? 'Restore conversation' : 'Archive conversation'} onClick={() => void toggleArchive()}><Archive size={18} /></button>
-                <button title="Conversation options"><MoreHorizontal size={18} /></button>
               </div>
             </header>
             {runtimeError && <div className="conversationError"><ErrorBox text={runtimeError} /></div>}
             <div className="messages">
+              <button onClick={() => void inbox?.loadEarlier(selectedRoom.id).catch(() => setRuntimeError('Earlier messages could not be loaded.'))}>Load earlier messages</button>
               {selectedRoom.messages.map(message => (
                 <div key={message.id} className={message.mine ? 'bubble mine' : 'bubble'}>
                   <b>{message.mine ? 'You' : message.sender}</b>
+                  {message.replyTo && <blockquote>{selectedRoom.messages.find(item => item.id === message.replyTo)?.body || 'Reply to an earlier message'}</blockquote>}
                   <p>{message.body || `[${message.msgtype.replace('m.', '')}]`}</p>
+                  {message.url && <button onClick={() => void downloadAttachment(message)}><Download size={14} /> Download attachment{message.size ? ` · ${(message.size / 1024).toFixed(0)} KB` : ''}</button>}
+                  {message.reactions.length > 0 && <div className="reactionList">{message.reactions.map(reaction => <span key={reaction.key}>{reaction.key} {reaction.count}</span>)}</div>}
                   <div className="bubbleFooter">
-                    <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                    <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}{message.edited ? ' · edited' : ''}{message.mine && message.read ? ' · Read' : ''}</small>
                     <div className="bubbleActions">
-                      <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍')}>👍</button>
-                      {message.mine && <button title="Delete message" onClick={() => void inbox?.deleteMessage(selectedRoom.id, message.id)}><Trash2 size={13} /></button>}
+                      <button title="Reply" onClick={() => { setReply(message); setEditing(null); }}>Reply</button>
+                      {message.mine && message.msgtype === 'm.text' && <button title="Edit" onClick={() => { setEditing(message); setReply(null); setComposer(message.body); }}>Edit</button>}
+                      <button title="React with thumbs up" onClick={() => void inbox?.react(selectedRoom.id, message.id, '👍').catch(() => setRuntimeError('Reaction could not be sent.'))}>👍</button>
+                      {message.mine && <button title="Delete message" onClick={() => void confirm('Delete this message for everyone, where supported?', { title: 'Delete message', kind: 'warning' }).then(confirmed => { if (confirmed) return inbox?.deleteMessage(selectedRoom.id, message.id); }).catch(() => setRuntimeError('Message could not be deleted.'))}><Trash2 size={13} /></button>}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+            {selectedRoom.typing.length > 0 && <small role="status">{selectedRoom.typing.join(', ')} typing…</small>}
+            {(reply || editing) && <div className="replyContext"><span>{editing ? 'Editing' : 'Replying to'}: {(editing || reply)?.body}</span><button onClick={() => { setReply(null); setEditing(null); setComposer(''); }} aria-label="Cancel reply or edit"><X size={14} /></button></div>}
             <div className="composer">
-              <button aria-label="Add attachment" title="Attachments are coming in the next media capability pass"><Plus size={18} /></button>
+              <input hidden ref={attachmentRef} type="file" onChange={event => void sendAttachment(event.target.files?.[0])} />
+              <button aria-label="Add attachment" disabled={sending} title="Send a file up to 25 MB" onClick={() => attachmentRef.current?.click()}><Plus size={18} /></button>
               <input
                 value={composer}
-                onChange={event => setComposer(event.target.value)}
-                onFocus={() => void inbox?.markRead(selectedRoom.id)}
+                onChange={event => {
+                  setComposer(event.target.value);
+                  if (Date.now() - lastTyping.current > 5000) {
+                    lastTyping.current = Date.now();
+                    void inbox?.client.sendTyping(selectedRoom.id, true, 10000).catch(() => undefined);
+                  }
+                }}
+                onFocus={() => void inbox?.markRead(selectedRoom.id).catch(() => undefined)}
                 onKeyDown={event => {
                   if (event.key === 'Enter' && !event.shiftKey) void sendMessage();
                 }}
                 placeholder={`Message ${selectedRoom.name}…`}
               />
-              <button className="send" onClick={() => void sendMessage()} aria-label="Send"><Send size={18} /></button>
+              <button className="send" disabled={sending || !composer.trim()} onClick={() => void sendMessage()} aria-label="Send"><Send size={18} /></button>
             </div>
           </>
         ) : (
@@ -566,17 +791,29 @@ export function App() {
         <div className="modalBackdrop" onMouseDown={() => setShowSettings(false)}>
           <div className="modal settingsModal" onMouseDown={event => event.stopPropagation()}>
             <div className="modalHeader">
-              <div><h2>Settings</h2><p>Local engine, connector health and updates.</p></div>
+              <div><h2>Settings</h2><p>Unibox {version} · Local engine, connector health and updates.</p></div>
               <button onClick={() => setShowSettings(false)}><X size={20} /></button>
             </div>
             <div className="privacyCard settingsPrivacy">
               <strong>Local-first by design</strong>
-              <span>Synapse, PostgreSQL, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>
+              <span>Connected accounts, message history and media live on this device. Unibox has no central chat-storage service.</span>
             </div>
             <div className="settingsSection">
+              <h3>Desktop</h3>
+              {([['close_to_tray', 'Close to system tray'], ['run_at_startup', 'Start with Windows'], ['start_minimized', 'Start minimized']] as const).map(([key, label]) => (
+                <label className="settingsRow" key={key}><span>{label}</span><input type="checkbox" checked={desktopPreferences[key]} onChange={event => void updateDesktopPreference(key, event.target.checked)} /></label>
+              ))}
               <h3>Local engine</h3>
-              <div className="settingsRow"><span>Synapse</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
-              <div className="settingsRow"><span>Matrix session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
+              <div className="settingsTitleRow">
+                <button disabled={maintenanceBusy} onClick={() => void runMaintenance('backup')}>Create backup</button>
+                <button disabled={maintenanceBusy} onClick={() => void runMaintenance('restore')}>Restore backup</button>
+                <button disabled={maintenanceBusy} onClick={() => void exportDiagnostics()}>Export diagnostics</button>
+              </div>
+              {maintenanceBusy && <p role="status">Maintaining local data. Keep Unibox open…</p>}
+              {maintenanceMessage && <p role="status">{maintenanceMessage}</p>}
+              <button onClick={() => void toggleNotifications()}>{notifications ? 'Disable notifications' : 'Enable notifications'}</button>
+              <div className="settingsRow"><span>Messaging service</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
+              <div className="settingsRow"><span>Local session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
               <div className="settingsRow"><span>Data</span><code>{runtime.data_root}</code></div>
             </div>
             <div className="settingsSection">
@@ -584,14 +821,35 @@ export function App() {
               <div className="connectorSettingsList">
                 {registry.filter(item => connectorStatuses[item.id]?.installed).map(connector => {
                   const status = connectorStatuses[connector.id];
-                  const busy = settingsBusyId === connector.id;
+                  const busy = maintenanceBusy || settingsBusyId === connector.id;
+                  const logins = connectorLogins[connector.id] ?? [];
                   return (
                     <div className="connectorSettingsRow" key={connector.id}>
-                      <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>
-                      <div>
-                        <button disabled={busy} onClick={() => void manageConnector(connector, status?.running ? 'stop' : 'start')}>{status?.running ? 'Stop' : 'Start'}</button>
-                        <button disabled={busy} onClick={() => void manageConnector(connector, 'update')}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}Update</button>
+                      <div className="connectorSettingsMain">
+                        <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>
+                        <div>
+                          <button disabled={busy} onClick={() => void manageConnector(connector, status?.running ? 'stop' : 'start')}>{status?.running ? 'Stop' : 'Start'}</button>
+                          <button disabled={busy} onClick={() => void manageConnector(connector, 'update')}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}Update</button>
+                        </div>
                       </div>
+                      {isProvisioningConnector(connector) && (
+                        <div className="connectorAccountList">
+                          {!status?.running && <small className="connectorAccountEmpty">Start this connector to manage its accounts.</small>}
+                          {status?.running && logins.length === 0 && <small className="connectorAccountEmpty">No active accounts reported by this connector.</small>}
+                          {status?.running && logins.map(loginId => {
+                            const loginBusy = accountBusyId === `${connector.id}:${loginId}`;
+                            return (
+                              <div className="connectorAccountRow" key={loginId}>
+                                <code title={loginId}>{loginId}</code>
+                                <div>
+                                  <button disabled={busy || loginBusy} onClick={() => void reconnectConnectorLogin(connector, loginId)}>Reconnect</button>
+                                  <button className="dangerAction" disabled={busy || loginBusy} onClick={() => void logoutConnectorLogin(connector, loginId)}>{loginBusy ? <LoaderCircle className="spin" size={13} /> : null}Log out</button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -607,8 +865,8 @@ export function App() {
         <div className="modalBackdrop">
           <div className="modal loginModal">
             <div className="modalHeader">
-              <div><h2>Connect {activeConnector.name}</h2><p>{activeConnector.description}</p></div>
-              <button onClick={() => setActiveConnector(null)}><X size={20} /></button>
+              <div><h2>{reloginId ? 'Reconnect' : 'Connect'} {activeConnector.name}</h2><p>{reloginId ? `Existing account: ${reloginId}` : activeConnector.description}</p></div>
+              <button onClick={() => void closeConnectorLogin()}><X size={20} /></button>
             </div>
             {activeConnector.risk_notice && <WarningBox text={activeConnector.risk_notice} />}
             {connectorError && <ErrorBox text={connectorError} />}
@@ -616,7 +874,7 @@ export function App() {
             {!connectorBusy && !loginStep && flows.length > 1 && (
               <div className="flowList">
                 {flows.map(flow => (
-                  <button key={flow.id} onClick={() => void beginFlow(activeConnector, flow)}>
+                  <button key={flow.id} onClick={() => void beginFlow(activeConnector, flow, reloginId)}>
                     <strong>{flow.name}</strong><span>{flow.description}</span>
                   </button>
                 ))}

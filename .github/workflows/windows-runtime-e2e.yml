@@ -1,0 +1,28 @@
+name: Windows runtime acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      prepare:
+        description: Prepare the local engine on this dedicated test machine
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: [self-hosted, Windows, X64, unibox-e2e]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test real Windows runtime
+        shell: powershell
+        env:
+          PREPARE_RUNTIME: ${{ inputs.prepare }}
+        run: |
+          ./scripts/test-windows-runtime.ps1 -Prepare:($env:PREPARE_RUNTIME -eq 'true')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-runtime-acceptance
+          path: runtime-e2e.json
+          if-no-files-found: warn

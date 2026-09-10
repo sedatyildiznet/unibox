@@ -1,0 +1,27 @@
+.settingsModal{width:min(820px,100%)}
+.settingsPrivacy{margin-bottom:16px}
+.settingsSection{padding:16px 0;border-top:1px solid #222831}
+.settingsSection:first-of-type{border-top:0}
+.settingsSection h3{margin:4px 0 12px;font-size:14px}
+.settingsRow{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 0;color:#aab2bd;font-size:13px}
+.settingsRow code{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8e98a5}
+.settingsTitleRow{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.settingsTitleRow>div,.settingsTitleRow>button{display:flex;align-items:center;gap:6px}
+.settingsSection button,.connectorSettingsRow button{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border-radius:8px;border:1px solid #2a3340;background:#131922;color:#bac2cd;cursor:pointer}
+.settingsSection button:hover,.connectorSettingsRow button:hover{background:#19212c;color:#fff}
+.settingsSection button:disabled,.connectorSettingsRow button:disabled{opacity:.5;cursor:default}
+.connectorSettingsList{display:grid;gap:10px;margin-top:10px}
+.connectorSettingsRow{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #252d38;border-radius:11px;background:#11161d}
+.connectorSettingsMain{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.connectorSettingsMain>div:first-child{display:flex;flex-direction:column;min-width:0}
+.connectorSettingsMain>div:first-child span{font-size:12px;color:#7f8996;margin-top:3px}
+.connectorSettingsMain>div:last-child{display:flex;gap:6px;flex:0 0 auto}
+.connectorAccountList{display:grid;gap:7px;padding-top:9px;border-top:1px solid #242b35}
+.connectorAccountRow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 9px;background:#0d1218;border-radius:8px}
+.connectorAccountRow code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aeb8c5;font-size:12px}
+.connectorAccountRow>div{display:flex;gap:6px;flex:0 0 auto}
+.connectorAccountEmpty{color:#737e8c;font-size:12px;padding:3px 2px}
+.connectorSettingsRow .dangerAction{border-color:#563039;color:#f0aab3}
+.connectorSettingsRow .dangerAction:hover{background:#2c1519;color:#ffc5cb}
+.settingsUpdate{margin-top:10px}
+@media(max-width:650px){.connectorSettingsMain,.connectorAccountRow{align-items:flex-start;flex-direction:column}.connectorSettingsMain>div:last-child,.connectorAccountRow>div{width:100%}.connectorAccountRow>div button{flex:1}}

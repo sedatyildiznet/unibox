@@ -41,15 +41,23 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
 
+      - name: Verify frontend and lifecycle behavior
+        run: |
+          pnpm test
+          pnpm check
+          ./scripts/test-bootstrap.ps1
+
       - name: Verify updater signing configuration
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           $config = Get-Content 'apps/desktop/src-tauri/tauri.conf.json' -Raw
           if ($config -match 'REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY') {
             Write-Error 'Updater public key is not configured. Generate the Tauri signing key, store the private key/password as GitHub Actions secrets, and commit only the public key to tauri.conf.json.'
             exit 1
           }
-          if (-not '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}') {
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
             Write-Error 'TAURI_SIGNING_PRIVATE_KEY secret is missing.'
             exit 1
           }

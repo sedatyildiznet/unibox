@@ -4,7 +4,7 @@
 
 Unibox is a local-first, open-source desktop universal messenger. It is designed to bring multiple accounts from supported messaging networks into one unified inbox without requiring an Unibox cloud account or storing your conversations on an Unibox-operated server.
 
-> **Status:** early engineering foundation. The desktop shell, local control daemon, update pipeline, connector registry and architecture are being built first; production connector provisioning is not yet complete.
+> **Status:** engineering preview. Windows packaging and automated checks do not establish production readiness. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [Windows acceptance](docs/WINDOWS_ACCEPTANCE.md).
 
 ## Why Unibox
 

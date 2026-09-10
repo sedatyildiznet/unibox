@@ -138,6 +138,8 @@ install_service() {
 Description=Unibox $id connector
 After=network.target unibox-synapse.service postgresql.service
 Requires=unibox-synapse.service postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -300,6 +302,8 @@ PY
 Description=Unibox Google Chat connector
 After=network.target unibox-synapse.service postgresql.service
 Requires=unibox-synapse.service postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
 [Service]
 Type=simple
 User=unibox
@@ -323,21 +327,24 @@ EOF
 
 update_python_googlechat() {
   local id="$1" repo="$2" dir="$ROOT/$1" active="$ROOT/$1/venv"
-  local staging="$ROOT/$1/venv.staging" backup="$ROOT/$1/venv.rollback"
+  local staging backup="$ROOT/$1/venv.rollback"
   [ -x "$active/bin/python" ] || fail "$id is not installed"
-  rm -rf "$staging" "$backup"
+  # Venv scripts contain absolute interpreter paths: never rename a staged venv.
+  install -d -m 0755 "$dir/python-releases"
+  staging=$(mktemp -d "$dir/python-releases/release-XXXXXXXX")
   python3 -m venv "$staging"
-  "$staging/bin/pip" install --disable-pip-version-check --upgrade pip wheel setuptools >/dev/null
-  "$staging/bin/pip" install --disable-pip-version-check "git+https://github.com/$repo.git" >/dev/null
-  systemctl stop "unibox-$id.service" || true
+  "$staging/bin/python" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools >/dev/null
+  "$staging/bin/python" -m pip install --disable-pip-version-check "git+https://github.com/$repo.git" >/dev/null
+  "$staging/bin/python" -c 'import mautrix_googlechat'
+  systemctl stop "unibox-$id.service"
+  rm -rf "$backup"
   mv "$active" "$backup"
-  mv "$staging" "$active"
+  ln -s "$staging" "$active"
   if systemctl start "unibox-$id.service" && sleep 3 && systemctl is-active --quiet "unibox-$id.service"; then
-    rm -rf "$backup"
     printf '%s Python connector updated successfully.\n' "$id"
   else
     systemctl stop "unibox-$id.service" || true
-    rm -rf "$active"
+    rm -f "$active"
     mv "$backup" "$active"
     systemctl start "unibox-$id.service" || true
     fail "$id Python connector update failed and was rolled back"
@@ -395,6 +402,9 @@ update_source_go() {
     fail "$id source update failed and was rolled back"
   fi
 }
+
+exec 9>/var/lock/unibox-maintenance.lock
+flock -n 9 || fail 'Another local maintenance operation is running'
 
 [ "$#" -ge 2 ] || fail 'usage: unibox-connector <install|start|stop|update> <id> ...'
 cmd="$1"; id="$2"; shift 2

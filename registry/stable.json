@@ -60,7 +60,7 @@
     "name": "Instagram",
     "category": "social",
     "repository": "mautrix/meta",
-    "binary": "mautrix-meta",
+    "binary": "mautrix-instagram",
     "asset_linux_amd64": "mautrix-meta-amd64",
     "port": 29319,
     "maturity": "beta",

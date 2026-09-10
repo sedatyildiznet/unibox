@@ -23,6 +23,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify managed runtime contract
         run: python scripts/verify-runtime-contract.py
+      - name: Reject CRLF in runtime shell resources
+        shell: pwsh
+        run: |
+          Get-ChildItem 'apps/desktop/src-tauri/resources/runtime' -Filter '*.sh' | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ([Array]::IndexOf($bytes, [byte]13) -ge 0) {
+              throw "Runtime shell resource contains CR characters: $($_.FullName)"
+            }
+          }
       - name: Validate runtime shell scripts
         shell: bash
         run: |

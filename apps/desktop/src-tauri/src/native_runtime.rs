@@ -202,7 +202,10 @@ impl NativeRuntimeManager {
     ) -> Result<String> {
         self.require_native_connector(connector)?;
         if connector.id != "telegram" {
-            return Ok(format!("{} does not require pre-connection settings.", connector.name));
+            return Ok(format!(
+                "{} does not require pre-connection settings.",
+                connector.name
+            ));
         }
 
         let api_id = settings
@@ -222,7 +225,9 @@ impl NativeRuntimeManager {
             .trim()
             .to_ascii_lowercase();
         if api_hash.len() != 32 || !api_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Err(anyhow!("Telegram API hash must be exactly 32 hexadecimal characters"));
+            return Err(anyhow!(
+                "Telegram API hash must be exactly 32 hexadecimal characters"
+            ));
         }
 
         let state = self.connector_state(connector);
@@ -384,7 +389,8 @@ impl NativeRuntimeManager {
             .context("invalid provisioning method")?;
         let mut url = Url::parse(&format!("{base}{suffix}"))
             .context("invalid local bridge provisioning URL")?;
-        url.query_pairs_mut().append_pair("user_id", &session.user_id);
+        url.query_pairs_mut()
+            .append_pair("user_id", &session.user_id);
         let mut request = self
             .http
             .request(method, url)
@@ -889,7 +895,10 @@ impl NativeRuntimeManager {
     fn session_path(&self) -> PathBuf {
         self.data_root.join("matrix-session.json")
     }
-    fn load_connector_settings(&self, connector: &ConnectorDefinition) -> Result<ConnectorLocalSettings> {
+    fn load_connector_settings(
+        &self,
+        connector: &ConnectorDefinition,
+    ) -> Result<ConnectorLocalSettings> {
         let path = self.connector_settings_path(connector);
         if !path.is_file() {
             return Ok(ConnectorLocalSettings::default());

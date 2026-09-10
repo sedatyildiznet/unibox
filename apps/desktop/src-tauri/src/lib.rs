@@ -3,6 +3,7 @@ mod native_runtime;
 use native_runtime::NativeRuntimeManager;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::{Manager, State};
 use unibox_core::{
     parse_registry, ClientHttpRequest, ClientHttpResponse, ConnectorDefinition, ConnectorStatus,
@@ -102,11 +103,36 @@ fn connector_status(id: String, state: State<'_, AppState>) -> Result<ConnectorS
 #[tauri::command]
 async fn connector_install(id: String, state: State<'_, AppState>) -> Result<String, String> {
     let connector = state.connector(&id)?;
-    state
-        .runtime
-        .install_connector(&connector)
-        .await
-        .map_err(|error| error.to_string())
+
+    // Windows can briefly lock a freshly-written mautrix config while the bridge
+    // replaces it with its migrated temp file. Stop any connector tracked by this
+    // process and retry only that transient sharing violation instead of surfacing
+    // a broken first-run experience to the user.
+    let _ = state.runtime.stop_connector(&connector);
+    let mut last_error = String::new();
+    for attempt in 0..5u64 {
+        match state.runtime.install_connector(&connector).await {
+            Ok(message) => return Ok(message),
+            Err(error) => {
+                let message = error.to_string();
+                let lower = message.to_ascii_lowercase();
+                let transient_lock = lower.contains("being used by another process")
+                    || lower.contains("process cannot access the file")
+                    || lower.contains("os error 32")
+                    || lower.contains("sharing violation");
+                if !transient_lock {
+                    return Err(message);
+                }
+                last_error = message;
+                tokio::time::sleep(Duration::from_millis(300 * (attempt + 1))).await;
+            }
+        }
+    }
+
+    Err(format!(
+        "{} connector setup could not acquire its local config after automatic retries. Close any old Unibox instance and try once more. Details: {}",
+        connector.name, last_error
+    ))
 }
 
 #[tauri::command]

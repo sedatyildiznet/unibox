@@ -37,6 +37,17 @@ jobs:
           go mod tidy
           # goolm removes the external libolm header/library dependency.
           go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
+      - name: Smoke test Discord config and registration
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'unibox-discord-smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $cfg = Join-Path $root 'config.yaml'
+          $reg = Join-Path $root 'registration.yaml'
+          & ./mautrix-discord.exe -e -c $cfg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Discord example config generation failed.' }
+          & ./mautrix-discord.exe -g -c $cfg -r $reg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Discord registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: missing-discord
@@ -61,6 +72,17 @@ jobs:
           Set-Content -Path unibox_googlechat_launcher.py -Value 'import runpy; runpy.run_module("mautrix_googlechat", run_name="__main__")' -Encoding utf8
           pyinstaller --noconfirm --clean --onefile --name mautrix-googlechat --collect-all mautrix --collect-all mautrix_googlechat --collect-all maugclib unibox_googlechat_launcher.py
           Copy-Item dist/mautrix-googlechat.exe ../mautrix-googlechat.exe
+      - name: Smoke test Google Chat config and registration
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'unibox-googlechat-smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $cfg = Join-Path $root 'config.yaml'
+          $reg = Join-Path $root 'registration.yaml'
+          & ./mautrix-googlechat.exe -e -c $cfg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Google Chat example config generation failed.' }
+          & ./mautrix-googlechat.exe -g -c $cfg -r $reg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Google Chat registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: missing-googlechat
@@ -116,6 +138,17 @@ jobs:
           go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-signal.exe ./cmd/mautrix-signal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item $ffiDll ../signal_ffi.dll -Force
+      - name: Smoke test Signal config and registration
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'unibox-signal-smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $cfg = Join-Path $root 'config.yaml'
+          $reg = Join-Path $root 'registration.yaml'
+          & ./mautrix-signal.exe -e -c $cfg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Signal example config generation failed.' }
+          & ./mautrix-signal.exe -g -c $cfg -r $reg
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Signal registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: missing-signal

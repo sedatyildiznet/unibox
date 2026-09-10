@@ -41,6 +41,19 @@ export type ConnectorStatus = {
   provisioning_url?: string | null;
 };
 
+export type ConnectorRequirementField = {
+  id: string;
+  name: string;
+  type: 'text' | 'password';
+  description?: string;
+};
+
+export type ConnectorRequirements = {
+  required: boolean;
+  fields: ConnectorRequirementField[];
+  help?: string;
+};
+
 export type LoginFlow = { id: string; name: string; description: string };
 export type LoginField = {
   type: string;
@@ -78,6 +91,9 @@ export const backend = {
   stopRuntime: () => invoke<string>('stop_runtime'),
   matrixSession: () => invoke<MatrixSession>('matrix_session'),
   connectorStatus: (id: string) => invoke<ConnectorStatus>('connector_status', { id }),
+  connectorRequirements: (id: string) => invoke<ConnectorRequirements>('connector_requirements', { id }),
+  configureConnector: (id: string, settings: Record<string, string>) =>
+    invoke<string>('connector_configure', { id, settings }),
   installConnector: (id: string) => invoke<string>('connector_install', { id }),
   startConnector: (id: string) => invoke<string>('connector_start', { id }),
   stopConnector: (id: string) => invoke<string>('connector_stop', { id }),

@@ -574,7 +574,15 @@ export function App() {
               {selectedRoom.messages.map(message => (
                 <div key={message.id} className={message.mine ? 'bubble mine' : 'bubble'}>
                   <b>{message.mine ? 'You' : message.sender}</b>
-                  <p>{message.body || `[${message.msgtype.replace('m.', '')}]`}</p>
+                  {message.msgtype === 'm.image' && message.mediaUrl ? (
+                    <img
+                      className="messageImage"
+                      src={message.mediaUrl}
+                      alt={message.body || 'Bridge QR code'}
+                    />
+                  ) : (
+                    <p>{message.body || `[${message.msgtype.replace('m.', '')}]`}</p>
+                  )}
                   <div className="bubbleFooter">
                     <small>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
                     <div className="bubbleActions">

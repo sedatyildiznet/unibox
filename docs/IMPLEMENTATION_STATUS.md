@@ -16,7 +16,7 @@ The current work improves the engineering build; it is not a production-complete
 - Version-matched backups with PostgreSQL dumps, validated restores and pre-restore recovery snapshots.
 - System tray, optional close-to-tray, Windows startup and start-minimized preferences.
 - Allowlisted diagnostic report export without raw logs or session material.
-- Typed BridgeV2 account lifecycle primitives for listing existing logins, re-login and logout.
+- BridgeV2 account listing plus settings actions for re-login and confirmed logout, with best-effort cancellation of abandoned login flows.
 
 ## Verification boundaries
 
@@ -25,7 +25,7 @@ Unit tests and build checks do not establish external-provider compatibility. Wi
 ## Still required before a stable release
 
 - Real Windows acceptance and live WhatsApp/Telegram multi-account messaging tests.
-- Provider-specific capability discovery and settings UI for account rename, re-login and logout management.
+- Provider-specific capability discovery and account rename/alias management; re-login/logout still require live-provider acceptance.
 - Full legacy Discord/Google Chat login acceptance and per-provider maturity review.
 - Database-aware connector rollback; current binary/venv rollback cannot reverse schema migrations.
 - Windows acceptance of backup/restore, forced-shutdown recovery acceptance, optional encryption and desktop-preference backup.

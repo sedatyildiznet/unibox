@@ -73,13 +73,16 @@ export function App() {
   const [showServices, setShowServices] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [connectorStatuses, setConnectorStatuses] = useState<Record<string, ConnectorStatus>>({});
+  const [connectorLogins, setConnectorLogins] = useState<Record<string, string[]>>({});
   const [settingsBusyId, setSettingsBusyId] = useState<string | null>(null);
+  const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
   const [activeConnector, setActiveConnector] = useState<ConnectorDefinition | null>(null);
   const [connectorBusy, setConnectorBusy] = useState(false);
   const [connectorError, setConnectorError] = useState('');
   const [flows, setFlows] = useState<LoginFlow[]>([]);
   const [loginStep, setLoginStep] = useState<LoginStep | null>(null);
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
+  const [reloginId, setReloginId] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
   const [desktopPreferences, setDesktopPreferences] = useState<DesktopPreferences>({ close_to_tray: false, run_at_startup: false, start_minimized: false });
@@ -158,7 +161,6 @@ export function App() {
         if (!disposed) setRooms(nextRooms);
       }, (roomId, name) => {
         if (!disposed && notificationEnabled.current && !document.hasFocus()) {
-          // Keep message contents out of lock-screen notifications.
           sendNotification({ title: name, body: 'New message in Unibox', extra: { roomId } });
         }
       }))
@@ -335,7 +337,21 @@ export function App() {
     const entries = await Promise.all(
       registry.map(async connector => [connector.id, await backend.connectorStatus(connector.id)] as const),
     );
-    setConnectorStatuses(Object.fromEntries(entries));
+    const statuses: Record<string, ConnectorStatus> = Object.fromEntries(entries);
+    setConnectorStatuses(statuses);
+
+    const loginEntries = await Promise.all(registry.map(async connector => {
+      const status = statuses[connector.id];
+      if (!isProvisioningConnector(connector) || !status?.installed || !status.running) {
+        return [connector.id, []] as const;
+      }
+      try {
+        return [connector.id, await backend.connectorLogins(connector.id)] as const;
+      } catch {
+        return [connector.id, []] as const;
+      }
+    }));
+    setConnectorLogins(Object.fromEntries(loginEntries));
   }
 
   async function openSettings(): Promise<void> {
@@ -365,6 +381,7 @@ export function App() {
   async function connectService(connector: ConnectorDefinition): Promise<void> {
     setActiveConnector(connector);
     setShowServices(false);
+    setReloginId(null);
     setConnectorBusy(true);
     setConnectorError('');
     setFlows([]);
@@ -380,14 +397,9 @@ export function App() {
       if (!status.running) await backend.startConnector(connector.id);
 
       if (isProvisioningConnector(connector)) {
-        const response = await backend.provision<{ flows: LoginFlow[] }>(
-          connector.id,
-          'GET',
-          '/v3/login/flows',
-        );
-        const nextFlows = response.flows ?? [];
+        const nextFlows = await backend.connectorLoginFlows(connector.id);
         setFlows(nextFlows);
-        if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
+        if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0], null);
       } else {
         await beginLegacyLogin(connector);
       }
@@ -398,22 +410,79 @@ export function App() {
     }
   }
 
-  async function beginFlow(connector: ConnectorDefinition, flow: LoginFlow): Promise<void> {
+  async function beginFlow(connector: ConnectorDefinition, flow: LoginFlow, existingLoginId?: string | null): Promise<void> {
     setConnectorBusy(true);
     setConnectorError('');
     try {
-      const step = await backend.provision<LoginStep>(
-        connector.id,
-        'POST',
-        `/v3/login/start/${encodeURIComponent(flow.id)}?client_http=1`,
-        {},
-      );
+      const step = await backend.startConnectorLogin(connector.id, flow.id, existingLoginId);
       setLoginValues({});
       setLoginStep(step);
     } catch (error) {
       setConnectorError(errorText(error));
     } finally {
       setConnectorBusy(false);
+    }
+  }
+
+  async function reconnectConnectorLogin(connector: ConnectorDefinition, loginId: string): Promise<void> {
+    setShowSettings(false);
+    setActiveConnector(connector);
+    setReloginId(loginId);
+    setConnectorBusy(true);
+    setConnectorError('');
+    setFlows([]);
+    setLoginStep(null);
+    setLoginValues({});
+    try {
+      const status = await backend.connectorStatus(connector.id);
+      if (!status.running) await backend.startConnector(connector.id);
+      const nextFlows = await backend.connectorLoginFlows(connector.id);
+      setFlows(nextFlows);
+      if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0], loginId);
+      if (nextFlows.length === 0) setConnectorError('This connector does not currently offer a re-login flow.');
+    } catch (error) {
+      setConnectorError(errorText(error));
+    } finally {
+      setConnectorBusy(false);
+    }
+  }
+
+  async function logoutConnectorLogin(connector: ConnectorDefinition, loginId: string): Promise<void> {
+    const approved = await confirm(
+      `Log out ${loginId} from ${connector.name}? The local connector session for this account will be removed.`,
+      { title: 'Log out account', kind: 'warning' },
+    );
+    if (!approved) return;
+    const busyId = `${connector.id}:${loginId}`;
+    setAccountBusyId(busyId);
+    setRuntimeError('');
+    try {
+      await backend.logoutConnectorLogin(connector.id, loginId);
+      await refreshConnectorStatuses();
+    } catch (error) {
+      setRuntimeError(errorText(error));
+    } finally {
+      setAccountBusyId(null);
+    }
+  }
+
+  async function closeConnectorLogin(): Promise<void> {
+    const connector = activeConnector;
+    const step = loginStep;
+    const returnToSettings = reloginId !== null;
+    setActiveConnector(null);
+    setFlows([]);
+    setLoginStep(null);
+    setLoginValues({});
+    setReloginId(null);
+    setConnectorError('');
+    if (connector && step && step.type !== 'complete' && step.login_id) {
+      try { await backend.cancelConnectorLogin(connector.id, step.login_id); }
+      catch { /* Best effort: a provider may already have completed or expired the flow. */ }
+    }
+    if (returnToSettings) {
+      setShowSettings(true);
+      try { await refreshConnectorStatuses(); } catch { /* Settings can still open with the last known state. */ }
     }
   }
 
@@ -638,7 +707,6 @@ export function App() {
                 <button title={selectedRoom.muted ? 'Unmute notifications' : 'Mute notifications'} onClick={() => void inbox?.toggleMuted(selectedRoom.id, !selectedRoom.muted).catch(() => setRuntimeError('Notification preference could not be saved.'))}>{selectedRoom.muted ? 'Unmute' : 'Mute'}</button>
                 <button title={selectedRoom.favorite ? 'Remove from favorites' : 'Add to favorites'} className={selectedRoom.favorite ? 'selectedAction' : ''} onClick={() => void toggleFavorite()}><Star size={18} /></button>
                 <button title={selectedRoom.archived ? 'Restore conversation' : 'Archive conversation'} onClick={() => void toggleArchive()}><Archive size={18} /></button>
-
               </div>
             </header>
             {runtimeError && <div className="conversationError"><ErrorBox text={runtimeError} /></div>}
@@ -754,13 +822,34 @@ export function App() {
                 {registry.filter(item => connectorStatuses[item.id]?.installed).map(connector => {
                   const status = connectorStatuses[connector.id];
                   const busy = maintenanceBusy || settingsBusyId === connector.id;
+                  const logins = connectorLogins[connector.id] ?? [];
                   return (
                     <div className="connectorSettingsRow" key={connector.id}>
-                      <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>
-                      <div>
-                        <button disabled={busy} onClick={() => void manageConnector(connector, status?.running ? 'stop' : 'start')}>{status?.running ? 'Stop' : 'Start'}</button>
-                        <button disabled={busy} onClick={() => void manageConnector(connector, 'update')}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}Update</button>
+                      <div className="connectorSettingsMain">
+                        <div><strong>{connector.name}</strong><span>{status?.running ? 'Running' : 'Stopped'} · {connector.maturity}</span></div>
+                        <div>
+                          <button disabled={busy} onClick={() => void manageConnector(connector, status?.running ? 'stop' : 'start')}>{status?.running ? 'Stop' : 'Start'}</button>
+                          <button disabled={busy} onClick={() => void manageConnector(connector, 'update')}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}Update</button>
+                        </div>
                       </div>
+                      {isProvisioningConnector(connector) && (
+                        <div className="connectorAccountList">
+                          {!status?.running && <small className="connectorAccountEmpty">Start this connector to manage its accounts.</small>}
+                          {status?.running && logins.length === 0 && <small className="connectorAccountEmpty">No active accounts reported by this connector.</small>}
+                          {status?.running && logins.map(loginId => {
+                            const loginBusy = accountBusyId === `${connector.id}:${loginId}`;
+                            return (
+                              <div className="connectorAccountRow" key={loginId}>
+                                <code title={loginId}>{loginId}</code>
+                                <div>
+                                  <button disabled={busy || loginBusy} onClick={() => void reconnectConnectorLogin(connector, loginId)}>Reconnect</button>
+                                  <button className="dangerAction" disabled={busy || loginBusy} onClick={() => void logoutConnectorLogin(connector, loginId)}>{loginBusy ? <LoaderCircle className="spin" size={13} /> : null}Log out</button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -776,8 +865,8 @@ export function App() {
         <div className="modalBackdrop">
           <div className="modal loginModal">
             <div className="modalHeader">
-              <div><h2>Connect {activeConnector.name}</h2><p>{activeConnector.description}</p></div>
-              <button onClick={() => setActiveConnector(null)}><X size={20} /></button>
+              <div><h2>{reloginId ? 'Reconnect' : 'Connect'} {activeConnector.name}</h2><p>{reloginId ? `Existing account: ${reloginId}` : activeConnector.description}</p></div>
+              <button onClick={() => void closeConnectorLogin()}><X size={20} /></button>
             </div>
             {activeConnector.risk_notice && <WarningBox text={activeConnector.risk_notice} />}
             {connectorError && <ErrorBox text={connectorError} />}
@@ -785,7 +874,7 @@ export function App() {
             {!connectorBusy && !loginStep && flows.length > 1 && (
               <div className="flowList">
                 {flows.map(flow => (
-                  <button key={flow.id} onClick={() => void beginFlow(activeConnector, flow)}>
+                  <button key={flow.id} onClick={() => void beginFlow(activeConnector, flow, reloginId)}>
                     <strong>{flow.name}</strong><span>{flow.description}</span>
                   </button>
                 ))}

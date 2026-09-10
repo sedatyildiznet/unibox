@@ -10,7 +10,7 @@
 - Harden connector HTTP validation and background native execution.
 - Accept source-built BridgeV2 connectors through the provisioning adapter.
 - Add attachment sending/downloading, replies, editing, read status, typing, reaction counts and opt-in notifications.
-- Add typed BridgeV2 account lifecycle primitives for listing existing logins, re-login and logout.
+- Add BridgeV2 account listing, re-login and confirmed logout controls in connector settings, including cancellation of abandoned login flows.
 - Add PowerShell lifecycle, Rust bootstrap and frontend regression coverage plus a dedicated Windows runtime acceptance workflow.
 
 See `docs/IMPLEMENTATION_STATUS.md` for outstanding release requirements.

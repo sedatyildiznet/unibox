@@ -42,6 +42,29 @@ function isProvisioningConnector(connector: ConnectorDefinition): boolean {
   return connector.adapter === 'bridgev2' || connector.adapter === 'source-go';
 }
 
+const SERVICE_ICONS: Record<string, string> = {
+  whatsapp: new URL('../assets/service-icons/whatsapp.svg', import.meta.url).href,
+  telegram: new URL('../assets/service-icons/telegram.svg', import.meta.url).href,
+  signal: new URL('../assets/service-icons/signal.svg', import.meta.url).href,
+  discord: new URL('../assets/service-icons/discord.svg', import.meta.url).href,
+  instagram: new URL('../assets/service-icons/instagram.svg', import.meta.url).href,
+  messenger: new URL('../assets/service-icons/messenger.svg', import.meta.url).href,
+  gmessages: new URL('../assets/service-icons/gmessages.svg', import.meta.url).href,
+  googlechat: new URL('../assets/service-icons/googlechat.svg', import.meta.url).href,
+  twitter: new URL('../assets/service-icons/twitter.svg', import.meta.url).href,
+  bluesky: new URL('../assets/service-icons/bluesky.svg', import.meta.url).href,
+  zulip: new URL('../assets/service-icons/zulip.svg', import.meta.url).href,
+};
+
+function ServiceIcon({ connector }: { connector: ConnectorDefinition }) {
+  const src = SERVICE_ICONS[connector.id];
+  return (
+    <div className="serviceCardIcon" aria-hidden="true">
+      {src ? <img src={src} alt="" /> : <span>{connector.name[0]}</span>}
+    </div>
+  );
+}
+
 export function App() {
   const [registry, setRegistry] = useState<ConnectorDefinition[]>([]);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -579,7 +602,7 @@ export function App() {
             <div className="serviceGrid">
               {registry.map(connector => (
                 <button key={connector.id} className="serviceCard" onClick={() => void connectService(connector)}>
-                  <div className="serviceCardIcon">{connector.name[0]}</div>
+                  <ServiceIcon connector={connector} />
                   <div>
                     <strong>{connector.name}</strong>
                     <span>{connector.description}</span>

@@ -134,6 +134,47 @@ jobs:
         shell: pwsh
         run: git clone --depth 1 --branch $env:MAUTRIX_REF https://github.com/${{ matrix.repo }}.git vendor/bridge
 
+      - name: Patch mautrix config writer for Windows
+        working-directory: vendor/bridge
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go mod download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $utilDir = (go list -m -f '{{.Dir}}' go.mau.fi/util).Trim()
+          if (-not $utilDir -or -not (Test-Path $utilDir)) {
+            throw 'Unable to locate go.mau.fi/util in the module cache.'
+          }
+          $upgrade = Join-Path $utilDir 'configupgrade\upgrade.go'
+          if (-not (Test-Path $upgrade)) {
+            throw "Unable to locate configupgrade/upgrade.go at $upgrade"
+          }
+
+          attrib -R $upgrade 2>$null
+          $raw = Get-Content $upgrade -Raw
+          if ($raw -notmatch 'tempFile\.Close\(\)') {
+            $needle = "`terr = os.Rename(tempFile.Name(), configPath)"
+            if (-not $raw.Contains($needle)) {
+              throw 'Expected mautrix config replacement code was not found. Refusing to build an unverified Windows connector.'
+            }
+            $replacement = @"
+          `terr = tempFile.Close()
+          `tif err != nil {
+          `t`t_ = os.Remove(tempFile.Name())
+          `t`treturn output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)
+          `t}
+          `terr = os.Rename(tempFile.Name(), configPath)
+          "@.Trim()
+            $raw = $raw.Replace($needle, $replacement)
+            Set-Content -Path $upgrade -Value $raw -NoNewline -Encoding utf8
+          }
+          gofmt -w $upgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-Content $upgrade -Raw) -notmatch 'tempFile\.Close\(\)') {
+            throw 'Windows config writer patch was not applied.'
+          }
+
       - name: Build native bridge
         working-directory: vendor/bridge
         shell: pwsh
@@ -149,6 +190,39 @@ jobs:
           $path = 'native-bridge/${{ matrix.output }}'
           if (-not (Test-Path $path)) { throw '${{ matrix.output }} was not produced' }
           if ((Get-Item $path).Length -lt 1MB) { throw '${{ matrix.output }} is unexpectedly small' }
+
+      - name: Regression test Windows config replacement and registration generation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'unibox-${{ matrix.id }}-config-smoke'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $config = Join-Path $root 'config.yaml'
+          $registration = Join-Path $root 'registration.yaml'
+          $exe = (Resolve-Path 'native-bridge/${{ matrix.output }}').Path
+
+          & $exe -e -c $config
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $config)) {
+            throw 'Bridge example config generation failed.'
+          }
+
+          $cfg = Get-Content $config -Raw
+          $cfg = $cfg.Replace('domain: example.com', 'domain: unibox.local')
+          $cfg = $cfg.Replace('http://example.localhost:8008', 'http://127.0.0.1:18008')
+          Set-Content -Path $config -Value $cfg -NoNewline -Encoding utf8
+
+          & $exe -g -c $config -r $registration
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Bridge appservice registration generation failed on Windows.'
+          }
+          if (-not (Test-Path $registration)) {
+            throw 'Bridge did not produce registration.yaml.'
+          }
+          $after = Get-Content $config -Raw
+          if ($after -notmatch 'as_token:' -or $after -notmatch 'hs_token:') {
+            throw 'Generated appservice tokens were not persisted to config.yaml.'
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -251,9 +325,10 @@ jobs:
           Runtime:
           - Native Tuwunel Matrix engine bundled inside the installer
           - Native WhatsApp and Telegram mautrix connectors bundled inside the installer
+          - Windows config replacement bug in mautrix/go-util is patched and regression-tested during the build
           - No WSL, Ubuntu, Docker, Hyper-V, apt, PostgreSQL or Python installation required
           - All runtime services bind locally and are managed by Unibox
 
-          This is an unsigned development build. WhatsApp and Telegram are the first native connectors enabled while the remaining connector gates are being migrated.
+          This is an unsigned development build. WhatsApp and Telegram are the native connectors exposed by this build; unsupported connector cards are not exposed in the desktop UI.
           "@
           gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox v0.3.0 Native Windows Dev' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

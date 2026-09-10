@@ -1,4 +1,4 @@
-name: Native Windows Installer Fix Release
+name: Native Windows Telegram Auth Hotfix
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: unibox-native-installerfix-release
+  group: unibox-native-telegram-hotfix
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +39,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tuwunel-windows-native
-          path: apps/desktop/src-tauri/resources/native-v033
+          path: apps/desktop/src-tauri/resources/native-v034
           repository: sedatyildiznet/unibox
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -48,7 +48,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-whatsapp
-          path: apps/desktop/src-tauri/resources/native-v033/connectors
+          path: apps/desktop/src-tauri/resources/native-v034/connectors
           repository: sedatyildiznet/unibox
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -57,42 +57,43 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-telegram
-          path: apps/desktop/src-tauri/resources/native-v033/connectors
+          path: apps/desktop/src-tauri/resources/native-v034/connectors
           repository: sedatyildiznet/unibox
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify native resources and installer hook
+      - name: Verify Telegram and provisioning fixes
         shell: pwsh
         run: |
           $required = @(
-            'apps/desktop/src-tauri/resources/native-v033/tuwunel.exe',
-            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-telegram.exe',
-            'apps/desktop/src-tauri/windows/hooks.nsh'
+            'apps/desktop/src-tauri/resources/native-v034/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-telegram.exe'
           )
           foreach ($path in $required) {
-            if (-not (Test-Path $path)) { throw "Missing required resource: $path" }
+            if (-not (Test-Path $path)) { throw "Missing native resource: $path" }
           }
-          foreach ($path in $required[0..2]) {
-            if ((Get-Item $path).Length -lt 1MB) { throw "Native resource is unexpectedly small: $path" }
+          $runtime = Get-Content 'apps/desktop/src-tauri/src/native_runtime.rs' -Raw
+          if ($runtime -notmatch 'append_pair\("user_id",\s*&session\.user_id\)') {
+            throw 'BridgeV2 provisioning user_id authentication fix is missing.'
           }
-          $tauri = Get-Content 'apps/desktop/src-tauri/tauri.conf.json' -Raw
-          if ($tauri -notmatch '"installerHooks"\s*:\s*"\.\/windows\/hooks\.nsh"') {
-            throw 'NSIS installerHooks is not wired to windows/hooks.nsh'
+          $lib = Get-Content 'apps/desktop/src-tauri/src/lib.rs' -Raw
+          if ($lib -notmatch 'repair_telegram_root_credentials') {
+            throw 'Telegram root credential repair is missing.'
           }
-          $hook = Get-Content 'apps/desktop/src-tauri/windows/hooks.nsh' -Raw
-          foreach ($name in @('unibox-desktop.exe','tuwunel.exe','mautrix-whatsapp.exe','mautrix-telegram.exe')) {
-            if ($hook -notmatch [regex]::Escape($name)) { throw "Installer hook does not stop $name" }
+          if ($runtime -notmatch 'Telegram API ID' -or $runtime -notmatch 'Telegram API Hash') {
+            throw 'Telegram API credential UI requirements are missing.'
           }
 
-      - name: Validate frontend and types
+      - name: Validate application
         shell: pwsh
         run: |
           pnpm check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build updated NSIS installer
+      - name: Build NSIS installer
         run: pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
 
       - name: Stage release
@@ -113,28 +114,28 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: unibox-native-installerfix-windows
+          name: unibox-native-v034-hotfix
           path: dist-native/*
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish installer-fix release
+      - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = 'v0.3.3-native-slotfix'
+          $tag = 'v0.3.4-native-telegramfix'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
           }
           $notes = @"
-          WSL-free native Windows build with immutable runtime resource slots.
+          Native Windows hotfix.
 
           Fixes:
-          - bundles Tuwunel and native connectors under a new versioned resource directory, so Windows never needs to overwrite a currently-running runtime executable
-          - new app startup stops only legacy Unibox runtime processes from the old resource path
-          - preserves AppData message/session/database data
-          - includes the latest native UI and connector fixes from native-runtime
+          - WhatsApp/BridgeV2 provisioning now supplies the Matrix user_id required for access-token authentication
+          - Telegram now asks for the user's API ID and API hash before connector startup
+          - Telegram api_id/api_hash are repaired into the top level expected by current mautrix-telegram
+          - existing local Matrix and connector data are preserved
           "@
-          gh release create $tag dist-native/* --target 31a07c2be410539e938e9816313abb1aa80ebe53 --title 'Unibox v0.3.3 Native Windows Slot Fix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          gh release create $tag dist-native/* --target c469837ec5ac1841b5fac4f0122cc1669a3a1b06 --title 'Unibox v0.3.4 Native Telegram/Auth Fix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

@@ -149,6 +149,37 @@ function Test-DistroExists {
     return ($distros | ForEach-Object { $_.Trim() }) -contains $Distro
 }
 
+function Ensure-ExistingRuntimeHealthy {
+    if (-not (Test-DistroExists)) {
+        return $false
+    }
+
+    $probe = Invoke-WslNative -Arguments @('-d', $Distro, '--', 'true')
+    if ($probe.ExitCode -eq 0) {
+        return $true
+    }
+
+    if ($probe.Text -match 'HCS_E_SERVICE_NOT_AVAILABLE|0x80370114|required feature is not installed|Gerekli bir özellik') {
+        Repair-WslPlatform -Reason 'The existing UniboxRuntime cannot start because the WSL2 virtualization platform is unavailable'
+        $probe = Invoke-WslNative -Arguments @('-d', $Distro, '--', 'true')
+        if ($probe.ExitCode -eq 0) {
+            return $true
+        }
+    }
+
+    $details = if ($probe.Text) { $probe.Text } else { "wsl.exe exit code $($probe.ExitCode)" }
+    throw "The existing UniboxRuntime could not start. Its local data was preserved and was not deleted. Restart Windows and try again. Details: $details"
+}
+
+function Remove-UnregisteredPartialRuntime {
+    # Safe recovery only: if WSL does not know this distro, a leftover directory
+    # can only be debris from an interrupted/failed import. Never unregister an
+    # existing distro here because it may contain the user's local messages.
+    if ((-not (Test-DistroExists)) -and (Test-Path $DistroDir)) {
+        Remove-Item $DistroDir -Recurse -Force -ErrorAction Stop
+    }
+}
+
 function Download-Rootfs {
     New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/SHA256SUMS" -OutFile $SumPath
@@ -183,12 +214,17 @@ function Import-Runtime {
     $import = Invoke-WslNative -Arguments @('--import', $Distro, $DistroDir, $RootfsPath, '--version', '2')
     if ($import.ExitCode -ne 0 -and ($import.Text -match 'HCS_E_SERVICE_NOT_AVAILABLE|0x80370114|required feature is not installed|Gerekli bir özellik')) {
         Repair-WslPlatform -Reason 'Windows Host Compute Service cannot create the WSL2 virtual machine'
+        Remove-UnregisteredPartialRuntime
+        New-Item -ItemType Directory -Force -Path $DistroDir | Out-Null
         $import = Invoke-WslNative -Arguments @('--import', $Distro, $DistroDir, $RootfsPath, '--version', '2')
     }
 
     if ($import.ExitCode -ne 0) {
         if (Test-FirmwareVirtualizationDisabled) {
             throw 'UniboxRuntime could not be created because hardware virtualization is disabled in BIOS/UEFI.'
+        }
+        if (-not (Test-DistroExists)) {
+            Remove-UnregisteredPartialRuntime
         }
         $details = if ($import.Text) { $import.Text } else { "wsl.exe exit code $($import.ExitCode)" }
         throw "Failed to import the UniboxRuntime WSL2 distribution: $details"
@@ -197,6 +233,7 @@ function Import-Runtime {
     $configure = Invoke-WslNative -Arguments @('-d', $Distro, '--', 'bash', '-lc', "printf '[boot]\nsystemd=true\n' > /etc/wsl.conf")
     if ($configure.ExitCode -ne 0) {
         [void](Invoke-WslNative -Arguments @('--unregister', $Distro))
+        Remove-UnregisteredPartialRuntime
         throw "Failed to configure systemd in UniboxRuntime: $($configure.Text)"
     }
 
@@ -226,7 +263,11 @@ function Invoke-Main {
     Ensure-Wsl
     New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
 
-    if (-not (Test-DistroExists)) {
+    if (Test-DistroExists) {
+        [void](Ensure-ExistingRuntimeHealthy)
+    }
+    else {
+        Remove-UnregisteredPartialRuntime
         Download-Rootfs
         Import-Runtime
     }

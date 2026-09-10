@@ -40,6 +40,20 @@ function Invoke-WslNative {
     }
 }
 
+function Convert-ToUnixText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    # Runtime resources are packaged on Windows. If Git or the packaging step
+    # gives a shell script CRLF line endings, bash reads e.g. "pipefail\r" as
+    # the option name. Normalize all shell input to LF immediately before it is
+    # sent to WSL so the runtime remains independent of checkout line endings.
+    $content = Get-Content -Raw -Encoding UTF8 $Path
+    return $content.Replace("`r`n", "`n").Replace("`r", "`n")
+}
+
 function Test-FirmwareVirtualizationDisabled {
     try {
         $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
@@ -242,7 +256,7 @@ function Import-Runtime {
 }
 
 function Invoke-LinuxScript([string]$Path) {
-    $content = Get-Content -Raw -Encoding UTF8 $Path
+    $content = Convert-ToUnixText -Path $Path
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
@@ -279,7 +293,7 @@ function Invoke-Main {
 
     Invoke-LinuxScript $ProvisionScript
 
-    $connectorContent = Get-Content -Raw -Encoding UTF8 $ConnectorScript
+    $connectorContent = Convert-ToUnixText -Path $ConnectorScript
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

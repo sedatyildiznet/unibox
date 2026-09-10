@@ -54,6 +54,58 @@ function errorText(error: unknown): string {
   return raw;
 }
 
+function base64UrlToBuffer(value: string): ArrayBuffer {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function bufferToBase64Url(value: ArrayBuffer): string {
+  const bytes = new Uint8Array(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function normalizeWebAuthnRequest(raw: Record<string, unknown>): PublicKeyCredentialRequestOptions {
+  const next: Record<string, unknown> = { ...raw };
+  if (typeof next.challenge === 'string') next.challenge = base64UrlToBuffer(next.challenge);
+  if (Array.isArray(next.allowCredentials)) {
+    next.allowCredentials = next.allowCredentials.map(item => {
+      if (!item || typeof item !== 'object') return item;
+      const credential = { ...(item as Record<string, unknown>) };
+      if (typeof credential.id === 'string') credential.id = base64UrlToBuffer(credential.id);
+      return credential;
+    });
+  }
+  return next as unknown as PublicKeyCredentialRequestOptions;
+}
+
+function serializeWebAuthnCredential(credential: PublicKeyCredential): unknown {
+  const withToJson = credential as PublicKeyCredential & { toJSON?: () => unknown };
+  if (typeof withToJson.toJSON === 'function') return withToJson.toJSON();
+
+  const response = credential.response;
+  if (!(response instanceof AuthenticatorAssertionResponse)) {
+    throw new Error('The security-key response type was not recognized.');
+  }
+  return {
+    id: credential.id,
+    rawId: bufferToBase64Url(credential.rawId),
+    type: credential.type,
+    response: {
+      authenticatorData: bufferToBase64Url(response.authenticatorData),
+      clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+      signature: bufferToBase64Url(response.signature),
+      userHandle: response.userHandle ? bufferToBase64Url(response.userHandle) : null,
+    },
+    clientExtensionResults: credential.getClientExtensionResults(),
+  };
+}
+
 function isProvisioningConnector(connector: ConnectorDefinition): boolean {
   return connector.adapter === 'bridgev2' || connector.adapter === 'source-go';
 }
@@ -113,6 +165,7 @@ export function App() {
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('Check for updates');
   const searchRef = useRef<HTMLInputElement>(null);
+  const automatedLoginStepRef = useRef('');
 
   const visibleRooms = useMemo(() => {
     let next = navMode === 'archive' ? rooms.filter(room => room.archived) : rooms.filter(room => !room.archived);
@@ -204,6 +257,17 @@ export function App() {
 
   useEffect(() => {
     if (!activeConnector || !loginStep) return;
+    if (loginStep.type !== 'display_and_wait' && loginStep.type !== 'client_http') return;
+
+    const automatedKey = [
+      activeConnector.id,
+      loginStep.login_id,
+      loginStep.step_id,
+      loginStep.txn_id ?? '',
+      loginStep.type,
+    ].join(':');
+    if (automatedLoginStepRef.current === automatedKey) return;
+    automatedLoginStepRef.current = automatedKey;
 
     if (loginStep.type === 'display_and_wait') {
       const connector = activeConnector;
@@ -221,7 +285,7 @@ export function App() {
       return;
     }
 
-    if (loginStep.type === 'client_http' && loginStep.client_http) {
+    if (loginStep.client_http) {
       const connector = activeConnector;
       const step = loginStep;
       void backend
@@ -428,12 +492,33 @@ export function App() {
   async function submitLoginStep(): Promise<void> {
     if (!activeConnector || !loginStep) return;
     const type = loginStep.type;
-    if (type !== 'user_input' && type !== 'cookies') return;
+    if (type !== 'user_input' && type !== 'cookies' && type !== 'webauthn') return;
 
     setConnectorBusy(true);
     setConnectorError('');
     try {
       const txn = loginStep.txn_id ? `?txn_id=${encodeURIComponent(loginStep.txn_id)}` : '';
+
+      if (type === 'webauthn') {
+        if (!loginStep.webauthn?.publicKey) {
+          throw new Error('This sign-in step did not include valid passkey/security-key parameters.');
+        }
+        const credential = await navigator.credentials.get({
+          publicKey: normalizeWebAuthnRequest(loginStep.webauthn.publicKey),
+        });
+        if (!(credential instanceof PublicKeyCredential)) {
+          throw new Error('No passkey or security-key credential was returned.');
+        }
+        const next = await backend.provision<LoginStep>(
+          activeConnector.id,
+          'POST',
+          `/v3/login/step/${encodeURIComponent(loginStep.login_id)}/${encodeURIComponent(loginStep.step_id)}/webauthn${txn}`,
+          serializeWebAuthnCredential(credential),
+        );
+        setLoginStep(next);
+        return;
+      }
+
       const next = await backend.provision<LoginStep>(
         activeConnector.id,
         'POST',
@@ -824,7 +909,15 @@ function LoginStepView({
   }
 
   if (step.type === 'webauthn') {
-    return <WarningBox text="This connector requested a WebAuthn security-key step. Hardware-key login is not available in this desktop build yet; choose another login flow if offered." />;
+    return (
+      <div className="loginForm">
+        {step.instructions && <p>{step.instructions}</p>}
+        <button className="primaryButton" disabled={busy} onClick={submit}>
+          {busy ? <LoaderCircle className="spin" size={18} /> : null}
+          Continue with passkey or security key
+        </button>
+      </div>
+    );
   }
 
   const fields: LoginField[] = step.type === 'user_input'

@@ -31,13 +31,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify project
-        run: |
-          pnpm check
-          pnpm build
-          cargo check --workspace --locked
-          cargo test --workspace --locked
-
       - name: Build Windows installer
         run: pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
 

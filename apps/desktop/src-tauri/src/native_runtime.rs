@@ -1297,7 +1297,8 @@ mod native_windows_smoke {
                         assert!(
                             flow_items
                                 .iter()
-                                .any(|flow| flow.get("id").and_then(|id| id.as_str()) == Some("phone")),
+                                .any(|flow| flow.get("id").and_then(|id| id.as_str())
+                                    == Some("phone")),
                             "Telegram did not advertise its phone login flow: {}",
                             flows
                         );

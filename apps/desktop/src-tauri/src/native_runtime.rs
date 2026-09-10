@@ -171,7 +171,7 @@ impl NativeRuntimeManager {
     }
 
     pub fn connector_available(&self, connector: &ConnectorDefinition) -> bool {
-        if !is_native_bridge(connector) || !self.connector_executable(connector).is_file() {
+        if !is_supported_connector(connector) || !self.connector_executable(connector).is_file() {
             return false;
         }
         // Telegram API credentials are application-level credentials. End users
@@ -205,7 +205,7 @@ impl NativeRuntimeManager {
             id: connector.id.clone(),
             installed,
             running,
-            provisioning_url: (installed && is_native_bridge(connector))
+            provisioning_url: (installed && is_bridgev2_connector(connector))
                 .then(|| format!("http://127.0.0.1:{}/_matrix/provision", connector.port)),
         }
     }
@@ -295,7 +295,8 @@ impl NativeRuntimeManager {
             .connectors
             .insert(connector.id.clone(), child);
 
-        for _ in 0..40 {
+        let attempts = if connector.adapter == "python-legacy" { 240 } else { 80 };
+        for _ in 0..attempts {
             if port_open(connector.port) {
                 return Ok(format!("{} connector started.", connector.name));
             }
@@ -597,15 +598,16 @@ impl NativeRuntimeManager {
     }
 
     fn require_native_connector(&self, connector: &ConnectorDefinition) -> Result<()> {
-        if !is_native_bridge(connector) {
+        if !is_supported_connector(connector) {
             return Err(anyhow!(
-                "{} is not using the native BridgeV2 adapter in this Windows build.",
-                connector.name
+                "{} uses an unsupported connector adapter: {}.",
+                connector.name,
+                connector.adapter
             ));
         }
         if !self.connector_executable(connector).is_file() {
             return Err(anyhow!(
-                "{} native connector binary is not bundled in this build.",
+                "{} connector executable is not bundled in this build.",
                 connector.name
             ));
         }
@@ -655,20 +657,50 @@ impl NativeRuntimeManager {
             YamlValue::String(format!("unibox-{}", connector.id)),
         );
 
-        let database = mapping_child(root, "database");
-        set_yaml(
-            database,
-            "type",
-            YamlValue::String("sqlite3-fk-wal".to_string()),
-        );
         let db = slash_path(&self.connector_state(connector).join("bridge.db"));
-        set_yaml(
-            database,
-            "uri",
-            YamlValue::String(format!("file:{db}?_txlock=immediate")),
-        );
-        set_yaml(database, "max_open_conns", YamlValue::Number(1.into()));
-        set_yaml(database, "max_idle_conns", YamlValue::Number(1.into()));
+        if connector.adapter == "python-legacy" {
+            // Legacy Python bridges keep the DB setting under appservice and
+            // expect a SQLAlchemy-style sqlite URI rather than BridgeV2's root
+            // database mapping.
+            set_yaml(
+                appservice,
+                "database",
+                YamlValue::String(format!("sqlite:{db}")),
+            );
+            let database_opts = mapping_child(appservice, "database_opts");
+            set_yaml(database_opts, "min_size", YamlValue::Number(1.into()));
+            set_yaml(database_opts, "max_size", YamlValue::Number(1.into()));
+        } else if connector.adapter == "legacy-go" {
+            // Legacy Go bridges also keep the database mapping inside
+            // appservice.
+            let database = mapping_child(appservice, "database");
+            set_yaml(
+                database,
+                "type",
+                YamlValue::String("sqlite3-fk-wal".to_string()),
+            );
+            set_yaml(
+                database,
+                "uri",
+                YamlValue::String(format!("file:{db}?_txlock=immediate")),
+            );
+            set_yaml(database, "max_open_conns", YamlValue::Number(1.into()));
+            set_yaml(database, "max_idle_conns", YamlValue::Number(1.into()));
+        } else {
+            let database = mapping_child(root, "database");
+            set_yaml(
+                database,
+                "type",
+                YamlValue::String("sqlite3-fk-wal".to_string()),
+            );
+            set_yaml(
+                database,
+                "uri",
+                YamlValue::String(format!("file:{db}?_txlock=immediate")),
+            );
+            set_yaml(database, "max_open_conns", YamlValue::Number(1.into()));
+            set_yaml(database, "max_idle_conns", YamlValue::Number(1.into()));
+        }
 
         let bridge = mapping_child(root, "bridge");
         let mut permissions = Mapping::new();
@@ -692,7 +724,20 @@ impl NativeRuntimeManager {
             set_yaml(encryption, "default", YamlValue::Bool(false));
         }
         if let Some(provisioning) = mapping_child_optional(root, "provisioning") {
-            set_yaml(provisioning, "allow_matrix_auth", YamlValue::Bool(true));
+            if is_bridgev2_connector(connector) {
+                set_yaml(provisioning, "allow_matrix_auth", YamlValue::Bool(true));
+            }
+        }
+        if connector.adapter == "legacy-go" || connector.adapter == "python-legacy" {
+            if let Some(provisioning) = mapping_child_optional(bridge, "provisioning") {
+                // Legacy bridges are connected through their Matrix management
+                // room commands in Unibox, so external provisioning is disabled.
+                set_yaml(
+                    provisioning,
+                    "shared_secret",
+                    YamlValue::String("disable".to_string()),
+                );
+            }
         }
 
         fs::write(path, serde_yaml::to_string(&cfg)?)?;
@@ -994,8 +1039,15 @@ fn port_open(port: u16) -> bool {
     .is_ok()
 }
 
-fn is_native_bridge(connector: &ConnectorDefinition) -> bool {
+fn is_bridgev2_connector(connector: &ConnectorDefinition) -> bool {
     matches!(connector.adapter.as_str(), "bridgev2" | "source-go")
+}
+
+fn is_supported_connector(connector: &ConnectorDefinition) -> bool {
+    matches!(
+        connector.adapter.as_str(),
+        "bridgev2" | "source-go" | "legacy-go" | "python-legacy"
+    )
 }
 
 #[cfg(target_os = "windows")]

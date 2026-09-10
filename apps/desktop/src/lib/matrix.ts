@@ -17,6 +17,7 @@ export type InboxMessage = {
   timestamp: number;
   mine: boolean;
   msgtype: string;
+  mediaUrl?: string;
 };
 
 export type InboxRoom = {
@@ -81,8 +82,12 @@ function roomSnapshot(client: MatrixClient, room: Room): InboxRoom {
     .slice(-100);
 
   const messages: InboxMessage[] = events.map(event => {
-    const content = event.getContent() as { body?: string; msgtype?: string };
+    const content = event.getContent() as { body?: string; msgtype?: string; url?: string };
     const senderId = event.getSender() ?? '';
+    const mediaUrl =
+      typeof content.url === 'string' && content.url.startsWith('mxc://')
+        ? client.mxcUrlToHttp(content.url) || undefined
+        : undefined;
     const sender = room.getMember(senderId)?.name || senderId || 'Unknown';
     return {
       id: event.getId() ?? `${event.getTs()}-${senderId}`,
@@ -91,6 +96,7 @@ function roomSnapshot(client: MatrixClient, room: Room): InboxRoom {
       timestamp: event.getTs(),
       mine: senderId === client.getUserId(),
       msgtype: typeof content.msgtype === 'string' ? content.msgtype : 'm.text',
+      mediaUrl,
     };
   });
 

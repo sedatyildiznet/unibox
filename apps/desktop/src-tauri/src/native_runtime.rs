@@ -1199,7 +1199,6 @@ fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-
 #[cfg(all(test, target_os = "windows"))]
 mod native_windows_smoke {
     use super::*;
@@ -1211,10 +1210,8 @@ mod native_windows_smoke {
             // Normal unit-test runs do not carry the heavyweight Windows runtime.
             return;
         };
-        let data_root = env::temp_dir().join(format!(
-            "unibox-native-v050-smoke-{}",
-            std::process::id()
-        ));
+        let data_root =
+            env::temp_dir().join(format!("unibox-native-v050-smoke-{}", std::process::id()));
         let _ = fs::remove_dir_all(&data_root);
 
         tauri::async_runtime::block_on(async {
@@ -1222,10 +1219,9 @@ mod native_windows_smoke {
                 .expect("create native runtime manager");
             manager.bootstrap().await.expect("bootstrap Tuwunel");
 
-            let registry = unibox_core::parse_registry(include_str!(
-                "../../../../registry/stable.json"
-            ))
-            .expect("parse connector registry");
+            let registry =
+                unibox_core::parse_registry(include_str!("../../../../registry/stable.json"))
+                    .expect("parse connector registry");
 
             for connector in &registry {
                 assert!(
@@ -1236,7 +1232,9 @@ mod native_windows_smoke {
                 manager
                     .install_connector(connector)
                     .await
-                    .unwrap_or_else(|error| panic!("{} install/start smoke failed: {error:#}", connector.name));
+                    .unwrap_or_else(|error| {
+                        panic!("{} install/start smoke failed: {error:#}", connector.name)
+                    });
                 assert!(
                     port_open(connector.port),
                     "{} did not open expected localhost port {}",
@@ -1248,9 +1246,14 @@ mod native_windows_smoke {
                     let flows = manager
                         .provision_request(connector, "GET", "/v3/login/flows", None)
                         .await
-                        .unwrap_or_else(|error| panic!("{} login flows smoke failed: {error:#}", connector.name));
+                        .unwrap_or_else(|error| {
+                            panic!("{} login flows smoke failed: {error:#}", connector.name)
+                        });
                     assert!(
-                        flows.get("flows").and_then(|value| value.as_array()).is_some(),
+                        flows
+                            .get("flows")
+                            .and_then(|value| value.as_array())
+                            .is_some(),
                         "{} provisioning response did not contain a flows array: {}",
                         connector.name,
                         flows

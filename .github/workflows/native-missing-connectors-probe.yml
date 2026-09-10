@@ -141,6 +141,17 @@ jobs:
           $ffiCargoRaw = Get-Content $ffiCargo -Raw
           $ffiCargoRaw = $ffiCargoRaw.Replace('crate-type = ["staticlib"]', 'crate-type = ["staticlib", "cdylib"]')
           Set-Content -Path $ffiCargo -Value $ffiCargoRaw -NoNewline -Encoding utf8
+          $mingwBin = 'C:\mingw64\bin'
+          if (-not (Test-Path (Join-Path $mingwBin 'gcc.exe'))) {
+            throw 'MinGW64 gcc is not available on the Windows runner.'
+          }
+          $env:PATH = "$mingwBin;$env:PATH"
+          $env:CC_x86_64_pc_windows_gnu = Join-Path $mingwBin 'gcc.exe'
+          $env:CXX_x86_64_pc_windows_gnu = Join-Path $mingwBin 'g++.exe'
+          $env:AR_x86_64_pc_windows_gnu = Join-Path $mingwBin 'ar.exe'
+          $env:CMAKE_GENERATOR = 'MinGW Makefiles'
+          $env:CMAKE_C_COMPILER = Join-Path $mingwBin 'gcc.exe'
+          $env:CMAKE_CXX_COMPILER = Join-Path $mingwBin 'g++.exe'
           Push-Location $libsignal
           $env:RUSTC_WRAPPER = ''
           $env:RUSTFLAGS = '-Ctarget-feature=-crt-static'

@@ -1022,23 +1022,10 @@ fn stop_legacy_native_slot_processes(resource_root: &Path) {
     let Some(resources_root) = resource_root.parent() else {
         return;
     };
-    let legacy_root = resources_root.join("native");
-    if legacy_root == resource_root {
-        return;
-    }
-
-    let targets = [
-        legacy_root.join("tuwunel.exe"),
-        legacy_root.join("connectors").join("mautrix-whatsapp.exe"),
-        legacy_root.join("connectors").join("mautrix-telegram.exe"),
-    ];
-    let quoted = targets
-        .iter()
-        .map(|path| format!("'{}'", path.to_string_lossy().replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(",");
+    let current = resource_root.to_string_lossy().replace(''', "''");
+    let parent = resources_root.to_string_lossy().replace(''', "''");
     let script = format!(
-        "$targets=@({quoted}); Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ExecutablePath -and ($targets -contains $_.ExecutablePath) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        "$current='{current}'; $parent='{parent}'; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($parent,[System.StringComparison]::OrdinalIgnoreCase) -and -not $_.ExecutablePath.StartsWith($current,[System.StringComparison]::OrdinalIgnoreCase) -and ((Split-Path $_.ExecutablePath -Leaf) -eq 'tuwunel.exe' -or (Split-Path $_.ExecutablePath -Leaf) -like 'mautrix-*.exe') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
     );
 
     let mut command = Command::new("powershell.exe");
@@ -1054,7 +1041,7 @@ fn stop_legacy_native_slot_processes(resource_root: &Path) {
         .stderr(Stdio::null());
     hide_console(&mut command);
     let _ = command.status();
-    std::thread::sleep(Duration::from_millis(600));
+    std::thread::sleep(Duration::from_millis(700));
 }
 
 #[cfg(not(target_os = "windows"))]

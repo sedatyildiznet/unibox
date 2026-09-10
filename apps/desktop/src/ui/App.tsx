@@ -400,8 +400,8 @@ export function App() {
           <p className="tagline">All your chats. One box.</p>
           <h2>Set up your private local engine</h2>
           <p>
-            Unibox stores its Matrix database, connector sessions, media and settings on this PC
-            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.
+            Unibox stores its message database, connector sessions, media and settings on this PC
+            inside a private native Windows runtime managed automatically by Unibox.
           </p>
           <div className="privacyCard">
             <strong>No Unibox cloud account.</strong>
@@ -413,8 +413,8 @@ export function App() {
             {runtimeBusy ? 'Installing local engine…' : 'Install local engine'}
           </button>
           <small>
-            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
-            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.
+            Windows 10/11 x64. No WSL, Docker, Hyper-V, PostgreSQL, Python or separate runtime
+            installation is required. The local engine is bundled and managed by Unibox.
           </small>
         </div>
       </div>
@@ -571,11 +571,11 @@ export function App() {
             </div>
             <div className="privacyCard settingsPrivacy">
               <strong>Local-first by design</strong>
-              <span>Synapse, PostgreSQL, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>
+              <span>The native Matrix engine, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>
             </div>
             <div className="settingsSection">
               <h3>Local engine</h3>
-              <div className="settingsRow"><span>Synapse</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
+              <div className="settingsRow"><span>Local Matrix engine</span><b>{runtime.synapse_ready ? 'Running' : 'Stopped'}</b></div>
               <div className="settingsRow"><span>Matrix session</span><b>{runtime.matrix_session_ready ? 'Ready' : 'Missing'}</b></div>
               <div className="settingsRow"><span>Data</span><code>{runtime.data_root}</code></div>
             </div>

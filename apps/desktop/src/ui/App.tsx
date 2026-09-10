@@ -312,7 +312,10 @@ export function App() {
     }
   }
 
-  async function continueConnectService(connector: ConnectorDefinition): Promise<void> {
+  async function continueConnectService(
+    connector: ConnectorDefinition,
+    legacyCommandOverride?: string,
+  ): Promise<void> {
     let status = await backend.connectorStatus(connector.id);
     if (!status.installed) {
       await backend.installConnector(connector.id);
@@ -344,7 +347,7 @@ export function App() {
 
       if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
     } else {
-      await beginLegacyLogin(connector);
+      await beginLegacyLogin(connector, legacyCommandOverride);
     }
   }
 
@@ -353,10 +356,13 @@ export function App() {
     setConnectorBusy(true);
     setConnectorError('');
     try {
-      await backend.configureConnector(activeConnector.id, connectorSetupValues);
+      const configured = await backend.configureConnector(activeConnector.id, connectorSetupValues);
       setConnectorRequirements(null);
       setConnectorSetupValues({});
-      await continueConnectService(activeConnector);
+      await continueConnectService(
+        activeConnector,
+        isProvisioningConnector(activeConnector) ? undefined : configured,
+      );
     } catch (error) {
       setConnectorError(errorText(error));
     } finally {
@@ -383,7 +389,10 @@ export function App() {
     }
   }
 
-  async function beginLegacyLogin(connector: ConnectorDefinition): Promise<void> {
+  async function beginLegacyLogin(
+    connector: ConnectorDefinition,
+    commandOverride?: string,
+  ): Promise<void> {
     if (!inbox) throw new Error('Local Matrix client is not ready yet.');
     const bot = `@${connector.bot_localpart || `${connector.id}bot`}:unibox.local`;
     const created = await inbox.client.createRoom({
@@ -391,7 +400,10 @@ export function App() {
       invite: [bot],
       name: `${connector.name} · Unibox setup`,
     });
-    await inbox.client.sendTextMessage(created.room_id, connector.legacy_login || 'login');
+    await inbox.client.sendTextMessage(
+      created.room_id,
+      commandOverride || connector.legacy_login || 'login',
+    );
     setSelectedRoomId(created.room_id);
     setActiveConnector(null);
   }
@@ -714,7 +726,7 @@ export function App() {
                   onClick={() => void submitConnectorRequirements()}
                 >
                   {connectorBusy ? <LoaderCircle className="spin" size={18} /> : null}
-                  Save locally and continue
+                  Continue
                 </button>
               </div>
             )}

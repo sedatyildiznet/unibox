@@ -1,56 +1,36 @@
 ; Unibox NSIS lifecycle hooks.
-; Native runtime processes keep their executables open on Windows, so an
-; in-place upgrade must stop both the desktop process and any orphaned
-; child runtime/connector processes before Tauri copies new resources.
+; Every release ships an immutable native resource slot (native-v050, ...).
+; Upgrades therefore stop running images but never delete or migrate user data.
+
+!macro UNIBOX_KILL_IMAGE IMAGE
+  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM ${IMAGE}'
+  Pop $0
+  Pop $1
+!macroend
 
 !macro UNIBOX_STOP_NATIVE_PROCESSES
   DetailPrint "Stopping Unibox native runtime processes before update..."
 
-  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM unibox-desktop.exe'
-  Pop $0
-  Pop $1
+  !insertmacro UNIBOX_KILL_IMAGE "unibox-desktop.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "tuwunel.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-whatsapp.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-telegram.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-signal.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-discord.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-instagram.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-meta.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-gmessages.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-googlechat.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-slack.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-twitter.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-bluesky.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-linkedin.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-gvoice.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-zulip.exe"
+  !insertmacro UNIBOX_KILL_IMAGE "mautrix-irc.exe"
 
-  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM tuwunel.exe'
-  Pop $0
-  Pop $1
-
-  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM mautrix-whatsapp.exe'
-  Pop $0
-  Pop $1
-
-  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM mautrix-telegram.exe'
-  Pop $0
-  Pop $1
-
-  ; Windows can keep the final image handle alive briefly after process exit.
+  ; Let Windows release final executable handles before Tauri replaces the app.
   Sleep 1500
-
-  ; Remove only bundled runtime executables from the previous installation.
-  ; User data, Matrix data and connector databases live under AppData and are
-  ; intentionally untouched.
-  ClearErrors
-  Delete "$INSTDIR\resources\native\tuwunel.exe"
-  ${If} ${Errors}
-    Sleep 1500
-    ClearErrors
-    Delete "$INSTDIR\resources\native\tuwunel.exe"
-  ${EndIf}
-
-  ClearErrors
-  Delete "$INSTDIR\resources\native\connectors\mautrix-whatsapp.exe"
-  ${If} ${Errors}
-    Sleep 750
-    ClearErrors
-    Delete "$INSTDIR\resources\native\connectors\mautrix-whatsapp.exe"
-  ${EndIf}
-
-  ClearErrors
-  Delete "$INSTDIR\resources\native\connectors\mautrix-telegram.exe"
-  ${If} ${Errors}
-    Sleep 750
-    ClearErrors
-    Delete "$INSTDIR\resources\native\connectors\mautrix-telegram.exe"
-  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL

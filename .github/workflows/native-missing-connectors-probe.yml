@@ -26,7 +26,13 @@ jobs:
           git clone --depth 1 https://github.com/mautrix/discord.git bridge
           Set-Location bridge
           go mod download
-          go build -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
+          # mautrix-discord currently pins zeroconfig v0.1.2, whose syslog
+          # config type is not Windows-compatible. Upstream zeroconfig fixed
+          # this by using an OS-neutral integer flag.
+          go get go.mau.fi/zeroconfig@latest
+          go mod tidy
+          # goolm removes the external libolm header/library dependency.
+          go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
       - uses: actions/upload-artifact@v4
         with:
           name: missing-discord

@@ -328,6 +328,20 @@ export function App() {
       );
       const nextFlows = response.flows ?? [];
       setFlows(nextFlows);
+
+      // Telegram should behave like a normal consumer messenger login.
+      // The application-level Telegram API credentials are bundled by Unibox
+      // at build time; the user only enters their phone number (and then the
+      // Telegram verification code / 2FA password when required).
+      if (connector.id === 'telegram') {
+        const phoneFlow = nextFlows.find(flow => flow.id === 'phone');
+        if (!phoneFlow) {
+          throw new Error('Telegram phone-number login is not available in this connector build.');
+        }
+        await beginFlow(connector, phoneFlow);
+        return;
+      }
+
       if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
     } else {
       await beginLegacyLogin(connector);

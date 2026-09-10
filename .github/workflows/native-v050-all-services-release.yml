@@ -181,7 +181,7 @@ jobs:
               attrib -R $upgrade 2>$null
               $raw = Get-Content $upgrade -Raw
               if ($raw -notmatch 'tempFile\.Close\(\)') {
-                $needle = '	err = os.Rename(tempFile.Name(), configPath)'
+                $needle = "`terr = os.Rename(tempFile.Name(), configPath)"
                 if ($raw.Contains($needle)) {
                   $replacement = @(
                     'err = tempFile.Close()',
@@ -214,6 +214,7 @@ jobs:
           $reg = Join-Path $root 'registration.yaml'
           & $exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Example config generation failed.' }
+          & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & $exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Registration generation failed.' }
       - uses: actions/upload-artifact@v4
@@ -324,6 +325,7 @@ jobs:
           $reg = Join-Path $root 'registration.yaml'
           & ./artifact/mautrix-signal.exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Signal config generation failed.' }
+          & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & ./artifact/mautrix-signal.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Signal registration generation failed.' }
       - uses: actions/upload-artifact@v4
@@ -359,7 +361,7 @@ jobs:
 
           $olmRoot = (Resolve-Path 'vendor/olm').Path
           $olmBuild = Join-Path $olmRoot 'build-mingw'
-          cmake -S $olmRoot -B $olmBuild -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake -S $olmRoot -B $olmBuild -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build $olmBuild --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -388,6 +390,7 @@ jobs:
           $reg = Join-Path $root 'registration.yaml'
           & ./artifact/mautrix-discord.exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Discord config generation failed.' }
+          & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & ./artifact/mautrix-discord.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Discord registration generation failed.' }
       - uses: actions/upload-artifact@v4
@@ -431,6 +434,7 @@ jobs:
           $reg = Join-Path $root 'registration.yaml'
           & ./artifact/mautrix-googlechat.exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Google Chat config generation failed.' }
+          & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & ./artifact/mautrix-googlechat.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Google Chat registration generation failed.' }
       - uses: actions/upload-artifact@v4

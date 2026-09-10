@@ -1,0 +1,131 @@
+name: Native Windows Hotfix Release
+
+on:
+  push:
+    branches:
+      - release/native-hotfix
+    paths:
+      - '.github/workflows/native-hotfix-release.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: unibox-native-hotfix-release
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reuse verified native Tuwunel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tuwunel-windows-native
+          path: apps/desktop/src-tauri/resources/native
+          repository: sedatyildiznet/unibox
+          run-id: 34465477705
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use freshly patched WhatsApp connector
+        uses: actions/download-artifact@v4
+        with:
+          name: native-bridge-whatsapp
+          path: apps/desktop/src-tauri/resources/native/connectors
+          repository: sedatyildiznet/unibox
+          run-id: 34506961399
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use freshly patched Telegram connector
+        uses: actions/download-artifact@v4
+        with:
+          name: native-bridge-telegram
+          path: apps/desktop/src-tauri/resources/native/connectors
+          repository: sedatyildiznet/unibox
+          run-id: 34506961399
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify native resources
+        shell: pwsh
+        run: |
+          $required = @(
+            'apps/desktop/src-tauri/resources/native/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native/connectors/mautrix-telegram.exe'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Missing native resource: $path" }
+            if ((Get-Item $path).Length -lt 1MB) { throw "Native resource is unexpectedly small: $path" }
+          }
+
+      - name: Validate latest native-runtime source
+        shell: pwsh
+        run: |
+          pnpm check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build updated NSIS installer
+        run: pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
+
+      - name: Stage release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-native | Out-Null
+          $installer = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer was not generated.' }
+          Copy-Item $installer.FullName 'dist-native/Unibox-Native-Setup.exe' -Force
+          if (Test-Path 'target/release/unibox-desktop.exe') {
+            Copy-Item 'target/release/unibox-desktop.exe' 'dist-native/Unibox-Native-Portable.exe' -Force
+          }
+          Get-ChildItem dist-native/*.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content dist-native/SHA256SUMS.txt -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unibox-native-hotfix-windows
+          path: dist-native/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish hotfix release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = 'v0.3.1-native-hotfix'
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
+          }
+          $notes = @"
+          Updated WSL-free native Windows build.
+
+          Includes:
+          - polished conversation filter controls
+          - bundled WhatsApp and Telegram service icons
+          - unsupported native connector cards hidden from the UI
+          - Windows connector config-lock mitigation in Unibox runtime
+          - freshly rebuilt WhatsApp and Telegram connectors with Windows config-writer patch
+          "@
+          gh release create $tag dist-native/* --target f0f0afd1bf55972793f82645af9bbcbeb3c0d04c --title 'Unibox v0.3.1 Native Windows Hotfix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

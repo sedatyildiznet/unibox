@@ -1,0 +1,31 @@
+name: Native Actions Cleanup
+
+on:
+  push:
+    branches:
+      - native-runtime
+    paths:
+      - '.github/workflows/cleanup-native-actions.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel stale native-runtime workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=native-runtime&per_page=100"             --jq '.workflow_runs[] | select((.status == "queued" or .status == "in_progress" or .status == "pending") and .name != "Native Missing Connectors Probe" and .name != "Native Actions Cleanup") | .id' |
+          while read -r id; do
+            [ -z "$id" ] && continue
+            echo "Cancelling stale run $id"
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
+          done

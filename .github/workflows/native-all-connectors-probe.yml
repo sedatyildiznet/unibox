@@ -134,6 +134,22 @@ jobs:
           $registration = Join-Path $root 'registration.yaml'
           & $exe -e -c $config
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $config)) { throw 'Example config generation failed' }
+          $cfg = Get-Content $config -Raw
+          $cfg = [regex]::Replace($cfg, '(?m)^(\s*domain:)\s*.*
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $registration)) { throw 'Registration generation failed' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-probe-${{ matrix.id }}
+          path: |
+            native-bridge/${{ matrix.output }}
+            CONNECTOR_SHA.txt
+          if-no-files-found: error
+          retention-days: 7
+, '$1 unibox.local')
+          $cfg = $cfg.Replace('http://example.localhost:8008', 'http://127.0.0.1:18008')
+          $cfg = $cfg.Replace('http://localhost:8008', 'http://127.0.0.1:18008')
+          Set-Content -Path $config -Value $cfg -NoNewline -Encoding utf8
           & $exe -g -c $config -r $registration
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $registration)) { throw 'Registration generation failed' }
 

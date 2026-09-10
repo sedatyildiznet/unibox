@@ -1,0 +1,147 @@
+name: Native All Mautrix Connectors Probe
+
+on:
+  push:
+    branches:
+      - native-runtime
+    paths:
+      - '.github/workflows/native-all-connectors-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: signal
+            repo: mautrix/signal
+            package: ./cmd/mautrix-signal
+            output: mautrix-signal.exe
+          - id: instagram
+            repo: mautrix/meta
+            package: ./cmd/mautrix-instagram
+            output: mautrix-instagram.exe
+          - id: messenger
+            repo: mautrix/meta
+            package: ./cmd/mautrix-meta
+            output: mautrix-meta.exe
+          - id: gmessages
+            repo: mautrix/gmessages
+            package: ./cmd/mautrix-gmessages
+            output: mautrix-gmessages.exe
+          - id: slack
+            repo: mautrix/slack
+            package: ./cmd/mautrix-slack
+            output: mautrix-slack.exe
+          - id: twitter
+            repo: mautrix/twitter
+            package: ./cmd/mautrix-twitter
+            output: mautrix-twitter.exe
+          - id: bluesky
+            repo: mautrix/bluesky
+            package: ./cmd/mautrix-bluesky
+            output: mautrix-bluesky.exe
+          - id: linkedin
+            repo: mautrix/linkedin
+            package: ./cmd/mautrix-linkedin
+            output: mautrix-linkedin.exe
+          - id: gvoice
+            repo: mautrix/gvoice
+            package: ./cmd/mautrix-gvoice
+            output: mautrix-gvoice.exe
+          - id: zulip
+            repo: mautrix/zulip
+            package: ./cmd/mautrix-zulip
+            output: mautrix-zulip.exe
+          - id: irc
+            repo: mautrix/irc
+            package: ./cmd/mautrix-irc
+            output: mautrix-irc.exe
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+
+      - name: Checkout latest connector source
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/${{ matrix.repo }}.git vendor/bridge
+          Push-Location vendor/bridge
+          git rev-parse HEAD | Set-Content ../../CONNECTOR_SHA.txt
+          Pop-Location
+
+      - name: Patch mautrix config writer for Windows
+        working-directory: vendor/bridge
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go mod download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $utilDir = (go list -m -f '{{.Dir}}' go.mau.fi/util).Trim()
+          if ($utilDir -and (Test-Path $utilDir)) {
+            $upgrade = Join-Path $utilDir 'configupgrade\upgrade.go'
+            if (Test-Path $upgrade) {
+              attrib -R $upgrade 2>$null
+              $raw = Get-Content $upgrade -Raw
+              if ($raw -notmatch 'tempFile\.Close\(\)') {
+                $needle = "`terr = os.Rename(tempFile.Name(), configPath)"
+                if ($raw.Contains($needle)) {
+                  $replacement = @"
+          `terr = tempFile.Close()
+          `tif err != nil {
+          `t`t_ = os.Remove(tempFile.Name())
+          `t`treturn output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)
+          `t}
+          `terr = os.Rename(tempFile.Name(), configPath)
+          "@.Trim()
+                  $raw = $raw.Replace($needle, $replacement)
+                  Set-Content -Path $upgrade -Value $raw -NoNewline -Encoding utf8
+                  gofmt -w $upgrade
+                }
+              }
+            }
+          }
+
+      - name: Build native Windows connector
+        working-directory: vendor/bridge
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path ../../native-bridge | Out-Null
+          go build -tags goolm -trimpath -ldflags="-s -w" -o ../../native-bridge/${{ matrix.output }} ${{ matrix.package }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Smoke test config and registration generation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'native-bridge/${{ matrix.output }}').Path
+          if ((Get-Item $exe).Length -lt 1MB) { throw 'Connector binary is unexpectedly small' }
+          $root = Join-Path $env:RUNNER_TEMP 'unibox-${{ matrix.id }}-smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $config = Join-Path $root 'config.yaml'
+          $registration = Join-Path $root 'registration.yaml'
+          & $exe -e -c $config
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $config)) { throw 'Example config generation failed' }
+          & $exe -g -c $config -r $registration
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $registration)) { throw 'Registration generation failed' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-probe-${{ matrix.id }}
+          path: |
+            native-bridge/${{ matrix.output }}
+            CONNECTOR_SHA.txt
+          if-no-files-found: error
+          retention-days: 7

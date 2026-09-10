@@ -19,50 +19,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: signal
-            repo: mautrix/signal
-            package: ./cmd/mautrix-signal
-            output: mautrix-signal.exe
-          - id: instagram
-            repo: mautrix/meta
-            package: ./cmd/mautrix-instagram
-            output: mautrix-instagram.exe
-          - id: messenger
-            repo: mautrix/meta
-            package: ./cmd/mautrix-meta
-            output: mautrix-meta.exe
-          - id: gmessages
-            repo: mautrix/gmessages
-            package: ./cmd/mautrix-gmessages
-            output: mautrix-gmessages.exe
-          - id: slack
-            repo: mautrix/slack
-            package: ./cmd/mautrix-slack
-            output: mautrix-slack.exe
-          - id: twitter
-            repo: mautrix/twitter
-            package: ./cmd/mautrix-twitter
-            output: mautrix-twitter.exe
-          - id: bluesky
-            repo: mautrix/bluesky
-            package: ./cmd/mautrix-bluesky
-            output: mautrix-bluesky.exe
-          - id: linkedin
-            repo: mautrix/linkedin
-            package: ./cmd/mautrix-linkedin
-            output: mautrix-linkedin.exe
-          - id: gvoice
-            repo: mautrix/gvoice
-            package: ./cmd/mautrix-gvoice
-            output: mautrix-gvoice.exe
-          - id: zulip
-            repo: mautrix/zulip
-            package: ./cmd/mautrix-zulip
-            output: mautrix-zulip.exe
-          - id: irc
-            repo: mautrix/irc
-            package: ./cmd/mautrix-irc
-            output: mautrix-irc.exe
+          - { id: signal, repo: mautrix/signal, package: ./cmd/mautrix-signal, output: mautrix-signal.exe }
+          - { id: instagram, repo: mautrix/meta, package: ./cmd/mautrix-instagram, output: mautrix-instagram.exe }
+          - { id: messenger, repo: mautrix/meta, package: ./cmd/mautrix-meta, output: mautrix-meta.exe }
+          - { id: gmessages, repo: mautrix/gmessages, package: ./cmd/mautrix-gmessages, output: mautrix-gmessages.exe }
+          - { id: slack, repo: mautrix/slack, package: ./cmd/mautrix-slack, output: mautrix-slack.exe }
+          - { id: twitter, repo: mautrix/twitter, package: ./cmd/mautrix-twitter, output: mautrix-twitter.exe }
+          - { id: bluesky, repo: mautrix/bluesky, package: ./cmd/mautrix-bluesky, output: mautrix-bluesky.exe }
+          - { id: linkedin, repo: mautrix/linkedin, package: ./cmd/mautrix-linkedin, output: mautrix-linkedin.exe }
+          - { id: gvoice, repo: mautrix/gvoice, package: ./cmd/mautrix-gvoice, output: mautrix-gvoice.exe }
+          - { id: zulip, repo: mautrix/zulip, package: ./cmd/mautrix-zulip, output: mautrix-zulip.exe }
+          - { id: irc, repo: mautrix/irc, package: ./cmd/mautrix-irc, output: mautrix-irc.exe }
 
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +53,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           go mod download
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           $utilDir = (go list -m -f '{{.Dir}}' go.mau.fi/util).Trim()
           if ($utilDir -and (Test-Path $utilDir)) {
             $upgrade = Join-Path $utilDir 'configupgrade\upgrade.go'
@@ -129,27 +95,19 @@ jobs:
           $exe = (Resolve-Path 'native-bridge/${{ matrix.output }}').Path
           if ((Get-Item $exe).Length -lt 1MB) { throw 'Connector binary is unexpectedly small' }
           $root = Join-Path $env:RUNNER_TEMP 'unibox-${{ matrix.id }}-smoke'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           $config = Join-Path $root 'config.yaml'
           $registration = Join-Path $root 'registration.yaml'
           & $exe -e -c $config
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $config)) { throw 'Example config generation failed' }
-          $cfg = Get-Content $config -Raw
-          $cfg = [regex]::Replace($cfg, '(?m)^(\s*domain:)\s*.*
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $registration)) { throw 'Registration generation failed' }
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-probe-${{ matrix.id }}
-          path: |
-            native-bridge/${{ matrix.output }}
-            CONNECTOR_SHA.txt
-          if-no-files-found: error
-          retention-days: 7
-, '$1 unibox.local')
+          $cfg = Get-Content $config -Raw
+          $cfg = [regex]::Replace($cfg, '(?m)^(\s*domain:)\s*.*$', '$1 unibox.local')
           $cfg = $cfg.Replace('http://example.localhost:8008', 'http://127.0.0.1:18008')
           $cfg = $cfg.Replace('http://localhost:8008', 'http://127.0.0.1:18008')
           Set-Content -Path $config -Value $cfg -NoNewline -Encoding utf8
+
           & $exe -g -c $config -r $registration
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $registration)) { throw 'Registration generation failed' }
 

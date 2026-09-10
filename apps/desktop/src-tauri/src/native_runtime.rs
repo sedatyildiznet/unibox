@@ -721,9 +721,8 @@ impl NativeRuntimeManager {
                 .api_hash
                 .filter(|value| value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
                 .ok_or_else(|| anyhow!("Telegram API hash is not configured"))?;
-            let network = mapping_child(root, "network");
-            set_yaml(network, "api_id", YamlValue::Number(api_id.into()));
-            set_yaml(network, "api_hash", YamlValue::String(api_hash));
+            set_yaml(root, "api_id", YamlValue::Number(api_id.into()));
+            set_yaml(root, "api_hash", YamlValue::String(api_hash));
         }
 
         if let Some(matrix) = mapping_child_optional(root, "matrix") {

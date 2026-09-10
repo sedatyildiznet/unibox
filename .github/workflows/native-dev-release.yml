@@ -111,18 +111,89 @@ jobs:
   build-bridge:
     runs-on: windows-latest
     timeout-minutes: 45
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - id: whatsapp
             repo: mautrix/whatsapp
+            ref: v0.2608.0
             package: ./cmd/mautrix-whatsapp
             output: mautrix-whatsapp.exe
+            required: true
           - id: telegram
             repo: mautrix/telegram
+            ref: v0.2608.0
             package: ./cmd/mautrix-telegram
             output: mautrix-telegram.exe
+            required: true
+          - id: signal
+            repo: mautrix/signal
+            ref: main
+            package: ./cmd/mautrix-signal
+            output: mautrix-signal.exe
+            required: false
+          - id: instagram
+            repo: mautrix/meta
+            ref: main
+            package: ./cmd/mautrix-instagram
+            output: mautrix-instagram.exe
+            required: false
+          - id: messenger
+            repo: mautrix/meta
+            ref: main
+            package: ./cmd/mautrix-meta
+            output: mautrix-meta.exe
+            required: false
+          - id: gmessages
+            repo: mautrix/gmessages
+            ref: main
+            package: ./cmd/mautrix-gmessages
+            output: mautrix-gmessages.exe
+            required: false
+          - id: slack
+            repo: mautrix/slack
+            ref: main
+            package: ./cmd/mautrix-slack
+            output: mautrix-slack.exe
+            required: false
+          - id: twitter
+            repo: mautrix/twitter
+            ref: main
+            package: ./cmd/mautrix-twitter
+            output: mautrix-twitter.exe
+            required: false
+          - id: bluesky
+            repo: mautrix/bluesky
+            ref: main
+            package: ./cmd/mautrix-bluesky
+            output: mautrix-bluesky.exe
+            required: false
+          - id: linkedin
+            repo: mautrix/linkedin
+            ref: main
+            package: ./cmd/mautrix-linkedin
+            output: mautrix-linkedin.exe
+            required: false
+          - id: gvoice
+            repo: mautrix/gvoice
+            ref: main
+            package: ./cmd/mautrix-gvoice
+            output: mautrix-gvoice.exe
+            required: false
+          - id: zulip
+            repo: mautrix/zulip
+            ref: main
+            package: ./cmd/mautrix-zulip
+            output: mautrix-zulip.exe
+            required: false
+          - id: irc
+            repo: mautrix/irc
+            ref: main
+            package: ./cmd/mautrix-irc
+            output: mautrix-irc.exe
+            required: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -132,7 +203,7 @@ jobs:
 
       - name: Checkout bridge
         shell: pwsh
-        run: git clone --depth 1 --branch $env:MAUTRIX_REF https://github.com/${{ matrix.repo }}.git vendor/bridge
+        run: git clone --depth 1 --branch ${{ matrix.ref }} https://github.com/${{ matrix.repo }}.git vendor/bridge
 
       - name: Patch mautrix config writer for Windows
         working-directory: vendor/bridge
@@ -253,15 +324,12 @@ jobs:
           name: native-tuwunel
           path: apps/desktop/src-tauri/resources/native-v034
 
-      - uses: actions/download-artifact@v4
+      - name: Download every native connector that passed the Windows build gate
+        uses: actions/download-artifact@v4
         with:
-          name: native-bridge-whatsapp
+          pattern: native-bridge-*
           path: apps/desktop/src-tauri/resources/native-v034/connectors
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: native-bridge-telegram
-          path: apps/desktop/src-tauri/resources/native-v034/connectors
+          merge-multiple: true
 
       - name: Verify packaged native resources
         shell: pwsh
@@ -272,8 +340,12 @@ jobs:
             'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-telegram.exe'
           )
           foreach ($path in $required) {
-            if (-not (Test-Path $path)) { throw "Missing native resource: $path" }
+            if (-not (Test-Path $path)) { throw "Missing required native resource: $path" }
           }
+          Write-Host 'Native connector binaries included in this installer:'
+          Get-ChildItem 'apps/desktop/src-tauri/resources/native-v034/connectors/*.exe' |
+            Sort-Object Name |
+            ForEach-Object { Write-Host (" - " + $_.Name) }
 
       - name: Validate application
         shell: pwsh
@@ -324,11 +396,12 @@ jobs:
 
           Runtime:
           - Native Tuwunel Matrix engine bundled inside the installer
-          - Native WhatsApp and Telegram mautrix connectors bundled inside the installer
+          - WhatsApp and Telegram are mandatory native connectors
+          - Signal, Instagram, Messenger, Google Messages, Slack, X/Twitter, Bluesky, LinkedIn, Google Voice, Zulip and IRC are built as native Windows candidates and automatically bundled when their upstream source passes the Windows build gate
           - Windows config replacement bug in mautrix/go-util is patched and regression-tested during the build
           - No WSL, Ubuntu, Docker, Hyper-V, apt, PostgreSQL or Python installation required
           - All runtime services bind locally and are managed by Unibox
 
-          This is an unsigned development build. WhatsApp and Telegram are the native connectors exposed by this build; unsupported connector cards are not exposed in the desktop UI.
+          This is an unsigned development build. The desktop UI exposes every connector binary that actually passed the native Windows build gate and was bundled into the installer. Legacy Python-only Google Chat and legacy Discord are not falsely advertised as native BridgeV2 connectors.
           "@
           gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox v0.3.0 Native Windows Dev' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

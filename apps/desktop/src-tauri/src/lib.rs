@@ -275,7 +275,7 @@ pub fn run() {
                 app.path()
                     .resource_dir()?
                     .join("resources")
-                    .join("native-v034"),
+                    .join("native-v040"),
             );
             let runtime = NativeRuntimeManager::new(data_root, resource_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;

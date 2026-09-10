@@ -1249,15 +1249,76 @@ mod native_windows_smoke {
                         .unwrap_or_else(|error| {
                             panic!("{} login flows smoke failed: {error:#}", connector.name)
                         });
-                    assert!(
-                        flows
-                            .get("flows")
-                            .and_then(|value| value.as_array())
-                            .is_some(),
-                        "{} provisioning response did not contain a flows array: {}",
-                        connector.name,
-                        flows
-                    );
+                    let flow_items = flows
+                        .get("flows")
+                        .and_then(|value| value.as_array())
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{} provisioning response did not contain a flows array: {}",
+                                connector.name, flows
+                            )
+                        });
+
+                    if connector.id == "whatsapp" {
+                        assert!(
+                            flow_items
+                                .iter()
+                                .any(|flow| flow.get("id").and_then(|id| id.as_str()) == Some("qr")),
+                            "WhatsApp did not advertise its QR login flow: {}",
+                            flows
+                        );
+                        let step = manager
+                            .provision_request(
+                                connector,
+                                "POST",
+                                "/v3/login/start/qr?client_http=1",
+                                Some(json!({})),
+                            )
+                            .await
+                            .unwrap_or_else(|error| {
+                                panic!("WhatsApp QR login start failed: {error:#}")
+                            });
+                        assert_eq!(
+                            step.get("type").and_then(|value| value.as_str()),
+                            Some("display_and_wait"),
+                            "WhatsApp QR start did not return display_and_wait: {}",
+                            step
+                        );
+                        assert_eq!(
+                            step.pointer("/display_and_wait/type")
+                                .and_then(|value| value.as_str()),
+                            Some("qr"),
+                            "WhatsApp login step did not contain QR display data: {}",
+                            step
+                        );
+                    }
+
+                    if connector.id == "telegram" {
+                        assert!(
+                            flow_items
+                                .iter()
+                                .any(|flow| flow.get("id").and_then(|id| id.as_str()) == Some("phone")),
+                            "Telegram did not advertise its phone login flow: {}",
+                            flows
+                        );
+                        let step = manager
+                            .provision_request(
+                                connector,
+                                "POST",
+                                "/v3/login/start/phone?client_http=1",
+                                Some(json!({})),
+                            )
+                            .await
+                            .unwrap_or_else(|error| {
+                                panic!("Telegram phone login start failed: {error:#}")
+                            });
+                        assert_eq!(
+                            step.get("type").and_then(|value| value.as_str()),
+                            Some("user_input"),
+                            "Telegram phone flow did not open a user-input step: {}",
+                            step
+                        );
+                    }
                 }
 
                 manager

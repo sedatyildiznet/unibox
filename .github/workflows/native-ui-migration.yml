@@ -1,0 +1,48 @@
+name: Native UI Migration
+
+on:
+  push:
+    branches:
+      - native-runtime
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+      - name: Replace WSL onboarding copy
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('apps/desktop/src/ui/App.tsx')
+          text = path.read_text(encoding='utf-8')
+          old_body = '''            Unibox stores its Matrix database, connector sessions, media and settings on this PC
+            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.'''
+          new_body = '''            Unibox stores its message database, connector sessions, media and settings on this PC
+            inside a private native Windows runtime managed automatically by Unibox.'''
+          old_note = '''            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
+            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.'''
+          new_note = '''            Windows 10/11 x64. No WSL, Docker, Hyper-V, PostgreSQL, Python or separate runtime
+            installation is required. The local engine is bundled and managed by Unibox.'''
+          if old_body not in text or old_note not in text:
+              raise SystemExit('Expected WSL onboarding copy was not found; refusing a partial rewrite.')
+          text = text.replace(old_body, new_body).replace(old_note, new_note)
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Commit migration
+        shell: bash
+        run: |
+          if git diff --quiet -- apps/desktop/src/ui/App.tsx; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/src/ui/App.tsx
+          git commit -m "ui: remove WSL requirements from native onboarding"
+          git push origin HEAD:native-runtime

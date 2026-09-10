@@ -2,6 +2,7 @@ mod native_runtime;
 
 use native_runtime::NativeRuntimeManager;
 use serde_json::Value;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{Manager, State};
@@ -42,6 +43,47 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
 #[cfg(not(target_os = "windows"))]
 fn normalize_windows_path(path: PathBuf) -> PathBuf {
     path
+}
+
+fn repair_telegram_root_credentials(data_root: &str) -> Result<(), String> {
+    let connector_root = PathBuf::from(data_root).join("connectors").join("telegram");
+    let settings_path = connector_root.join("unibox-settings.json");
+    let config_path = connector_root.join("config.yaml");
+
+    let settings_raw = fs::read_to_string(&settings_path)
+        .map_err(|error| format!("failed to read Telegram local settings: {error}"))?;
+    let settings: Value = serde_json::from_str(&settings_raw)
+        .map_err(|error| format!("invalid Telegram local settings: {error}"))?;
+    let api_id = settings
+        .get("api_id")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "Telegram API ID is not configured".to_string())?;
+    let api_hash = settings
+        .get("api_hash")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .ok_or_else(|| "Telegram API hash is not configured".to_string())?;
+
+    let config_raw = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read Telegram config: {error}"))?;
+    let mut config: serde_yaml::Value = serde_yaml::from_str(&config_raw)
+        .map_err(|error| format!("invalid Telegram config: {error}"))?;
+    let root = config
+        .as_mapping_mut()
+        .ok_or_else(|| "Telegram config root is not a mapping".to_string())?;
+    root.insert(
+        serde_yaml::Value::String("api_id".to_string()),
+        serde_yaml::Value::Number(api_id.into()),
+    );
+    root.insert(
+        serde_yaml::Value::String("api_hash".to_string()),
+        serde_yaml::Value::String(api_hash.to_string()),
+    );
+    fs::write(&config_path, serde_yaml::to_string(&config).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("failed to write Telegram config: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -119,18 +161,27 @@ fn connector_status(id: String, state: State<'_, AppState>) -> Result<ConnectorS
 async fn connector_install(id: String, state: State<'_, AppState>) -> Result<String, String> {
     let connector = state.connector(&id)?;
 
-    // Windows can briefly lock a freshly-written mautrix config while the bridge
-    // replaces it with its migrated temp file. Stop any connector tracked by this
-    // process and retry only that transient sharing violation instead of surfacing
-    // a broken first-run experience to the user.
     let _ = state.runtime.stop_connector(&connector);
     let mut last_error = String::new();
-    for attempt in 0..5u64 {
+    let mut telegram_repaired = false;
+    for attempt in 0..6u64 {
         match state.runtime.install_connector(&connector).await {
             Ok(message) => return Ok(message),
             Err(error) => {
                 let message = error.to_string();
                 let lower = message.to_ascii_lowercase();
+
+                if connector.id == "telegram"
+                    && !telegram_repaired
+                    && (lower.contains("api_hash is required") || lower.contains("api_id is required"))
+                {
+                    let runtime = state.runtime.status().await;
+                    repair_telegram_root_credentials(&runtime.data_root)?;
+                    telegram_repaired = true;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+
                 let transient_lock = lower.contains("being used by another process")
                     || lower.contains("process cannot access the file")
                     || lower.contains("os error 32")
@@ -145,7 +196,7 @@ async fn connector_install(id: String, state: State<'_, AppState>) -> Result<Str
     }
 
     Err(format!(
-        "{} connector setup could not acquire its local config after automatic retries. Close any old Unibox instance and try once more. Details: {}",
+        "{} connector setup could not complete after automatic retries. Details: {}",
         connector.name, last_error
     ))
 }

@@ -55,6 +55,7 @@ impl NativeRuntimeManager {
     pub fn new(data_root: impl Into<PathBuf>, resource_root: impl Into<PathBuf>) -> Result<Self> {
         let data_root = data_root.into().join("runtime-native");
         let resource_root = resource_root.into();
+        stop_legacy_native_slot_processes(&resource_root);
         fs::create_dir_all(&data_root)
             .with_context(|| format!("failed to create {}", data_root.display()))?;
         Ok(Self {
@@ -891,6 +892,49 @@ fn port_open(port: u16) -> bool {
 fn is_native_bridge(connector: &ConnectorDefinition) -> bool {
     matches!(connector.adapter.as_str(), "bridgev2" | "source-go")
 }
+
+#[cfg(target_os = "windows")]
+fn stop_legacy_native_slot_processes(resource_root: &Path) {
+    let Some(resources_root) = resource_root.parent() else {
+        return;
+    };
+    let legacy_root = resources_root.join("native");
+    if legacy_root == resource_root {
+        return;
+    }
+
+    let targets = [
+        legacy_root.join("tuwunel.exe"),
+        legacy_root.join("connectors").join("mautrix-whatsapp.exe"),
+        legacy_root.join("connectors").join("mautrix-telegram.exe"),
+    ];
+    let quoted = targets
+        .iter()
+        .map(|path| format!("'{}'", path.to_string_lossy().replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        "$targets=@({quoted}); Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ExecutablePath -and ($targets -contains $_.ExecutablePath) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+    );
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command);
+    let _ = command.status();
+    std::thread::sleep(Duration::from_millis(600));
+}
+
+#[cfg(not(target_os = "windows"))]
+fn stop_legacy_native_slot_processes(_resource_root: &Path) {}
 
 fn hide_console(command: &mut Command) {
     #[cfg(target_os = "windows")]

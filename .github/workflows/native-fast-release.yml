@@ -1,9 +1,9 @@
-name: Native Fast Windows Release
+name: Native Fast Windows Release (manual cached artifacts)
 
+# This workflow intentionally uses pinned, previously verified binary artifacts.
+# Keep it manual-only so it can never overwrite a release produced by the
+# source-rebuilding native development workflow after connector fixes.
 on:
-  push:
-    branches:
-      - native-runtime
   workflow_dispatch:
 
 permissions:
@@ -160,25 +160,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish native prerelease
+      - name: Publish manual cached-artifact prerelease
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = 'v0.3.0-native-dev'
+          $tag = 'v0.3.0-native-cache-dev'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
           }
           $notes = @"
-          Native Windows development build. WSL has been removed from the desktop runtime.
+          Manual cached-artifact native Windows build.
 
-          Bundled locally:
-          - Tuwunel Matrix engine
-          - WhatsApp connector
-          - Telegram connector
-
-          No WSL, Ubuntu, Docker, Hyper-V, apt, PostgreSQL or Python installation is required.
-          This build is unsigned and intended for native-runtime testing.
+          This workflow intentionally uses pinned previously verified binaries and does NOT publish the canonical v0.3.0-native-dev tag. The canonical native development release is produced by native-dev-release.yml from freshly rebuilt connector sources.
           "@
-          gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox v0.3.0 Native Windows Dev' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox Native Cached Artifact Dev' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

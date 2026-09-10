@@ -59,7 +59,7 @@ const SERVICE_ICONS: Record<string, string> = {
 function ServiceIcon({ connector }: { connector: ConnectorDefinition }) {
   const src = SERVICE_ICONS[connector.id];
   return (
-    <div className="serviceCardIcon" aria-hidden="true">
+    <div className={`serviceCardIcon serviceIcon-${connector.id}`} aria-hidden="true">
       {src ? <img src={src} alt="" /> : <span>{connector.name[0]}</span>}
     </div>
   );

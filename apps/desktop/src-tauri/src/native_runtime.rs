@@ -174,6 +174,9 @@ impl NativeRuntimeManager {
         if !is_supported_connector(connector) || !self.connector_executable(connector).is_file() {
             return false;
         }
+        if connector.id == "signal" && !self.signal_ffi_path().is_file() {
+            return false;
+        }
         // Telegram API credentials are application-level credentials. End users
         // must never be asked to create their own app keys. If this build does not
         // contain Unibox's developer credentials, hide Telegram instead of exposing
@@ -653,6 +656,16 @@ impl NativeRuntimeManager {
                 connector.name
             ));
         }
+        if connector.id == "signal" && !self.signal_ffi_path().is_file() {
+            return Err(anyhow!(
+                "Signal native runtime dependency signal_ffi.dll is not bundled in this build."
+            ));
+        }
+        if connector.id == "telegram" && self.telegram_app_credentials().is_err() {
+            return Err(anyhow!(
+                "Telegram application credentials are not bundled in this Unibox build."
+            ));
+        }
         Ok(())
     }
 
@@ -992,6 +1005,10 @@ impl NativeRuntimeManager {
             .join("connectors")
             .join(format!("{}.exe", connector.binary))
     }
+
+    fn signal_ffi_path(&self) -> PathBuf {
+        self.resource_root.join("connectors").join("signal_ffi.dll")
+    }
 }
 
 impl Drop for NativeRuntimeManager {
@@ -1179,5 +1196,75 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || (ip.segments()[0] & 0xfe00) == 0xfc00
                 || (ip.segments()[0] & 0xffc0) == 0xfe80
         }
+    }
+}
+
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_windows_smoke {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn bundled_runtime_starts_every_advertised_connector() {
+        let Some(resource_root) = env::var_os("UNIBOX_NATIVE_SMOKE_ROOT").map(PathBuf::from) else {
+            // Normal unit-test runs do not carry the heavyweight Windows runtime.
+            return;
+        };
+        let data_root = env::temp_dir().join(format!(
+            "unibox-native-v050-smoke-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_root);
+
+        tauri::async_runtime::block_on(async {
+            let manager = NativeRuntimeManager::new(&data_root, &resource_root)
+                .expect("create native runtime manager");
+            manager.bootstrap().await.expect("bootstrap Tuwunel");
+
+            let registry = unibox_core::parse_registry(include_str!(
+                "../../../../registry/stable.json"
+            ))
+            .expect("parse connector registry");
+
+            for connector in &registry {
+                assert!(
+                    manager.connector_available(connector),
+                    "{} is advertised by registry but its native package/dependencies are unavailable",
+                    connector.name
+                );
+                manager
+                    .install_connector(connector)
+                    .await
+                    .unwrap_or_else(|error| panic!("{} install/start smoke failed: {error:#}", connector.name));
+                assert!(
+                    port_open(connector.port),
+                    "{} did not open expected localhost port {}",
+                    connector.name,
+                    connector.port
+                );
+
+                if is_bridgev2_connector(connector) {
+                    let flows = manager
+                        .provision_request(connector, "GET", "/v3/login/flows", None)
+                        .await
+                        .unwrap_or_else(|error| panic!("{} login flows smoke failed: {error:#}", connector.name));
+                    assert!(
+                        flows.get("flows").and_then(|value| value.as_array()).is_some(),
+                        "{} provisioning response did not contain a flows array: {}",
+                        connector.name,
+                        flows
+                    );
+                }
+
+                manager
+                    .stop_connector(connector)
+                    .unwrap_or_else(|error| panic!("{} stop failed: {error:#}", connector.name));
+            }
+
+            manager.stop().expect("stop native runtime");
+        });
+
+        let _ = fs::remove_dir_all(&data_root);
     }
 }

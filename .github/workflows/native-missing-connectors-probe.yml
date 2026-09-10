@@ -1,0 +1,107 @@
+name: Native Missing Connectors Probe
+
+on:
+  push:
+    branches:
+      - native-runtime
+    paths:
+      - '.github/workflows/native-missing-connectors-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discord:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Build mautrix-discord for Windows
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/mautrix/discord.git bridge
+          Set-Location bridge
+          go mod download
+          go build -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missing-discord
+          path: mautrix-discord.exe
+          if-no-files-found: error
+
+  googlechat:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Package mautrix-googlechat for Windows
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/mautrix/googlechat.git bridge
+          Set-Location bridge
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+          Set-Content -Path unibox_googlechat_launcher.py -Value 'import runpy; runpy.run_module("mautrix_googlechat", run_name="__main__")' -Encoding utf8
+          pyinstaller --noconfirm --clean --onefile --name mautrix-googlechat --collect-all mautrix --collect-all mautrix_googlechat --collect-all maugclib unibox_googlechat_launcher.py
+          Copy-Item dist/mautrix-googlechat.exe ../mautrix-googlechat.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missing-googlechat
+          path: mautrix-googlechat.exe
+          if-no-files-found: error
+
+  signal:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Install native build prerequisites
+        shell: pwsh
+        run: |
+          choco install protoc -y --no-progress
+      - name: Build libsignal FFI and mautrix-signal
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --depth 1 --recurse-submodules https://github.com/mautrix/signal.git bridge
+          Set-Location bridge
+          git submodule update --init --recursive
+          $libsignal = Join-Path (Get-Location) 'pkg/libsignalgo/libsignal'
+          Push-Location $libsignal
+          $env:RUSTC_WRAPPER = ''
+          $env:RUSTFLAGS = '-Ctarget-feature=-crt-static'
+          cargo build -p libsignal-ffi --release --target x86_64-pc-windows-gnu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          $ffi = Join-Path $libsignal 'target/x86_64-pc-windows-gnu/release/libsignal_ffi.a'
+          if (-not (Test-Path $ffi)) { throw "libsignal_ffi.a not found at $ffi" }
+          Copy-Item $ffi ./libsignal_ffi.a -Force
+          $cflags = 'pkg/libsignalgo/cflags.go'
+          $raw = Get-Content $cflags -Raw
+          $needle = '#cgo LDFLAGS: -lsignal_ffi -ldl -lm -lz -lstdc++'
+          $replacement = '#cgo !windows LDFLAGS: -lsignal_ffi -ldl -lm -lz -lstdc++' + [Environment]::NewLine + '#cgo windows LDFLAGS: -lsignal_ffi -lm -lz -lstdc++ -lws2_32 -luserenv -lbcrypt -lntdll -lsecur32 -lcrypt32 -ladvapi32 -lkernel32 -luser32 -lole32 -lshell32 -lwinmm -liphlpapi -ldbghelp'
+          $raw = $raw.Replace($needle, $replacement)
+          Set-Content -Path $cflags -Value $raw -NoNewline -Encoding utf8
+          gofmt -w $cflags
+          $env:LIBRARY_PATH = "$(Get-Location);$env:LIBRARY_PATH"
+          $env:CGO_ENABLED = '1'
+          go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-signal.exe ./cmd/mautrix-signal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missing-signal
+          path: mautrix-signal.exe
+          if-no-files-found: error

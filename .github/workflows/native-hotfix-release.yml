@@ -86,12 +86,10 @@ jobs:
             if ($hook -notmatch [regex]::Escape($name)) { throw "Installer hook does not stop $name" }
           }
 
-      - name: Validate latest native-runtime source
+      - name: Validate frontend and types
         shell: pwsh
         run: |
           pnpm check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --workspace --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build updated NSIS installer

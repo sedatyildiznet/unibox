@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: unibox-native-dev-release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   TUWUNEL_REF: v1.9.0

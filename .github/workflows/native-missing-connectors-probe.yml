@@ -70,9 +70,8 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - name: Install native build prerequisites
         shell: pwsh
-        run: |
-          choco install protoc -y --no-progress
-      - name: Build libsignal FFI and mautrix-signal
+        run: choco install protoc -y --no-progress
+      - name: Build libsignal DLL and mautrix-signal
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -80,28 +79,37 @@ jobs:
           Set-Location bridge
           git submodule update --init --recursive
           $libsignal = Join-Path (Get-Location) 'pkg/libsignalgo/libsignal'
+          $ffiCargo = Join-Path $libsignal 'rust/bridge/ffi/Cargo.toml'
+          $ffiCargoRaw = Get-Content $ffiCargo -Raw
+          $ffiCargoRaw = $ffiCargoRaw.Replace('crate-type = ["staticlib"]', 'crate-type = ["staticlib", "cdylib"]')
+          Set-Content -Path $ffiCargo -Value $ffiCargoRaw -NoNewline -Encoding utf8
           Push-Location $libsignal
           $env:RUSTC_WRAPPER = ''
           $env:RUSTFLAGS = '-Ctarget-feature=-crt-static'
           cargo build -p libsignal-ffi --release --target x86_64-pc-windows-gnu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location
-          $ffi = Join-Path $libsignal 'target/x86_64-pc-windows-gnu/release/libsignal_ffi.a'
-          if (-not (Test-Path $ffi)) { throw "libsignal_ffi.a not found at $ffi" }
-          Copy-Item $ffi ./libsignal_ffi.a -Force
+          $ffiDir = Join-Path $libsignal 'target/x86_64-pc-windows-gnu/release'
+          $ffiImport = Join-Path $ffiDir 'libsignal_ffi.dll.a'
+          $ffiDll = Join-Path $ffiDir 'signal_ffi.dll'
+          if (-not (Test-Path $ffiImport)) { throw "libsignal import library not found at $ffiImport" }
+          if (-not (Test-Path $ffiDll)) { throw "signal_ffi.dll not found at $ffiDll" }
           $cflags = 'pkg/libsignalgo/cflags.go'
           $raw = Get-Content $cflags -Raw
           $needle = '#cgo LDFLAGS: -lsignal_ffi -ldl -lm -lz -lstdc++'
-          $replacement = '#cgo !windows LDFLAGS: -lsignal_ffi -ldl -lm -lz -lstdc++' + [Environment]::NewLine + '#cgo windows LDFLAGS: -lsignal_ffi -lm -lz -lstdc++ -lws2_32 -luserenv -lbcrypt -lntdll -lsecur32 -lcrypt32 -ladvapi32 -lkernel32 -luser32 -lole32 -lshell32 -lwinmm -liphlpapi -ldbghelp'
+          $replacement = '#cgo !windows LDFLAGS: -lsignal_ffi -ldl -lm -lz -lstdc++' + [Environment]::NewLine + '#cgo windows LDFLAGS: -lsignal_ffi'
           $raw = $raw.Replace($needle, $replacement)
           Set-Content -Path $cflags -Value $raw -NoNewline -Encoding utf8
           gofmt -w $cflags
-          $env:LIBRARY_PATH = "$(Get-Location);$env:LIBRARY_PATH"
+          $env:LIBRARY_PATH = "$ffiDir;$env:LIBRARY_PATH"
           $env:CGO_ENABLED = '1'
           go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-signal.exe ./cmd/mautrix-signal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item $ffiDll ../signal_ffi.dll -Force
       - uses: actions/upload-artifact@v4
         with:
           name: missing-signal
-          path: mautrix-signal.exe
+          path: |
+            mautrix-signal.exe
+            signal_ffi.dll
           if-no-files-found: error

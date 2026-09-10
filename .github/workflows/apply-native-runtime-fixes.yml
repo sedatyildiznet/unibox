@@ -1,0 +1,76 @@
+name: Apply Native Runtime Fixes
+
+on:
+  push:
+    branches:
+      - release/native-hotfix
+    paths:
+      - '.github/workflows/apply-native-runtime-fixes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+          fetch-depth: 0
+
+      - name: Fix Telegram config placement
+        shell: pwsh
+        run: |
+          $path = 'apps/desktop/src-tauri/src/native_runtime.rs'
+          $raw = Get-Content $path -Raw
+          $old = @'
+            let network = mapping_child(root, "network");
+            set_yaml(network, "api_id", YamlValue::Number(api_id.into()));
+            set_yaml(network, "api_hash", YamlValue::String(api_hash));
+'@
+          $new = @'
+            set_yaml(root, "api_id", YamlValue::Number(api_id.into()));
+            set_yaml(root, "api_hash", YamlValue::String(api_hash));
+'@
+          if (-not $raw.Contains($old)) {
+            if ($raw.Contains('set_yaml(root, "api_id"')) {
+              Write-Host 'Telegram config placement is already fixed.'
+            } else {
+              throw 'Expected Telegram network api_id/api_hash block was not found.'
+            }
+          } else {
+            $raw = $raw.Replace($old, $new)
+            Set-Content -Path $path -Value $raw -NoNewline -Encoding utf8
+          }
+
+      - name: Verify provisioning auth and Telegram requirements
+        shell: pwsh
+        run: |
+          $raw = Get-Content 'apps/desktop/src-tauri/src/native_runtime.rs' -Raw
+          if ($raw -notmatch 'append_pair\("user_id",\s*&session\.user_id\)') {
+            throw 'BridgeV2 provisioning user_id auth fix is missing.'
+          }
+          if ($raw -notmatch 'set_yaml\(root,\s*"api_id"') {
+            throw 'Telegram api_id is not written at config root.'
+          }
+          if ($raw -notmatch 'set_yaml\(root,\s*"api_hash"') {
+            throw 'Telegram api_hash is not written at config root.'
+          }
+          if ($raw -notmatch 'connector_requirements') {
+            throw 'Telegram credential requirements flow is missing.'
+          }
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No source changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/desktop/src-tauri/src/native_runtime.rs
+          git commit -m 'fix(telegram): write API credentials to bridge config root'
+          git push origin HEAD:native-runtime

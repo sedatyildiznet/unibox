@@ -1,15 +1,18 @@
+mod native_runtime;
+
+use native_runtime::NativeRuntimeManager;
 use serde_json::Value;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, State};
+use tauri::{Manager, State};
 use unibox_core::{
     parse_registry, ClientHttpRequest, ClientHttpResponse, ConnectorDefinition, ConnectorStatus,
-    MatrixSession, RuntimeManager, RuntimeStatus,
+    MatrixSession, RuntimeStatus,
 };
 
 const REGISTRY_RAW: &str = include_str!("../../../../registry/stable.json");
 
 struct AppState {
-    runtime: RuntimeManager,
+    runtime: NativeRuntimeManager,
     registry: Vec<ConnectorDefinition>,
 }
 
@@ -51,24 +54,13 @@ async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, Str
 }
 
 #[tauri::command]
-fn bootstrap_runtime(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
-    let script = normalize_windows_path(
-        app.path()
-            .resource_dir()
-            .map_err(|error| error.to_string())?
-            .join("resources")
-            .join("runtime")
-            .join("bootstrap.ps1"),
-    );
-    state
-        .runtime
-        .bootstrap(&script)
-        .map_err(|error| error.to_string())
+async fn bootstrap_runtime(state: State<'_, AppState>) -> Result<String, String> {
+    state.runtime.bootstrap().await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn start_runtime(state: State<'_, AppState>) -> Result<String, String> {
-    state.runtime.start().map_err(|error| error.to_string())
+async fn start_runtime(state: State<'_, AppState>) -> Result<String, String> {
+    state.runtime.start().await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -78,10 +70,7 @@ fn stop_runtime(state: State<'_, AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn matrix_session(state: State<'_, AppState>) -> Result<MatrixSession, String> {
-    state
-        .runtime
-        .matrix_session()
-        .map_err(|error| error.to_string())
+    state.runtime.matrix_session().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -91,20 +80,22 @@ fn connector_status(id: String, state: State<'_, AppState>) -> Result<ConnectorS
 }
 
 #[tauri::command]
-fn connector_install(id: String, state: State<'_, AppState>) -> Result<String, String> {
+async fn connector_install(id: String, state: State<'_, AppState>) -> Result<String, String> {
     let connector = state.connector(&id)?;
     state
         .runtime
         .install_connector(&connector)
+        .await
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn connector_start(id: String, state: State<'_, AppState>) -> Result<String, String> {
+async fn connector_start(id: String, state: State<'_, AppState>) -> Result<String, String> {
     let connector = state.connector(&id)?;
     state
         .runtime
         .start_connector(&connector)
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -118,11 +109,12 @@ fn connector_stop(id: String, state: State<'_, AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
-fn connector_update(id: String, state: State<'_, AppState>) -> Result<String, String> {
+async fn connector_update(id: String, state: State<'_, AppState>) -> Result<String, String> {
     let connector = state.connector(&id)?;
     state
         .runtime
         .update_connector(&connector)
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -162,9 +154,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_root =
-                normalize_windows_path(app.path().app_local_data_dir()?.join("runtime"));
-            let runtime = RuntimeManager::new(data_root)?;
+            let data_root = normalize_windows_path(app.path().app_local_data_dir()?);
+            let resource_root = normalize_windows_path(
+                app.path()
+                    .resource_dir()?
+                    .join("resources")
+                    .join("native"),
+            );
+            let runtime = NativeRuntimeManager::new(data_root, resource_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;
             app.manage(AppState { runtime, registry });
             Ok(())

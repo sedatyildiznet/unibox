@@ -1022,8 +1022,8 @@ fn stop_legacy_native_slot_processes(resource_root: &Path) {
     let Some(resources_root) = resource_root.parent() else {
         return;
     };
-    let current = resource_root.to_string_lossy().replace(''', "''");
-    let parent = resources_root.to_string_lossy().replace(''', "''");
+    let current = resource_root.to_string_lossy().replace('\'', "''");
+    let parent = resources_root.to_string_lossy().replace('\'', "''");
     let script = format!(
         "$current='{current}'; $parent='{parent}'; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($parent,[System.StringComparison]::OrdinalIgnoreCase) -and -not $_.ExecutablePath.StartsWith($current,[System.StringComparison]::OrdinalIgnoreCase) -and ((Split-Path $_.ExecutablePath -Leaf) -eq 'tuwunel.exe' -or (Split-Path $_.ExecutablePath -Leaf) -like 'mautrix-*.exe') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
     );

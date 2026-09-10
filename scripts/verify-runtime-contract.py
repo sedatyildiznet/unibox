@@ -32,6 +32,13 @@ handles_hcs_failure = (
     and 'Repair-WslPlatform' in BOOTSTRAP
 )
 
+recovers_stale_runtime = (
+    'Reset-StaleRuntimeRegistration' in BOOTSTRAP
+    and 'ext4.vhdx' in BOOTSTRAP
+    and 'ERROR_PATH_NOT_FOUND' in BOOTSTRAP
+    and "@('--unregister', $Distro)" in BOOTSTRAP
+)
+
 checks = {
     'core uses managed Synapse service name': 'pub const SYNAPSE_SERVICE: &str = "unibox-synapse";' in CORE,
     'core does not start distro package service': 'systemctl start postgresql matrix-synapse' not in CORE,
@@ -41,6 +48,7 @@ checks = {
     'bootstrap starts managed Synapse service': 'postgresql unibox-synapse' in BOOTSTRAP,
     'bootstrap can repair required WSL2 Windows features': repairs_wsl2,
     'bootstrap handles HCS service-not-available failures': handles_hcs_failure,
+    'bootstrap rebuilds stale registered runtime with missing VHDX': recovers_stale_runtime,
     'provision pins Synapse version': 'SYNAPSE_VERSION=1.160.0' in PROVISION,
     'Synapse client listener is loopback only': "bind_addresses: ['127.0.0.1']" in PROVISION,
     'public registration stays disabled': 'enable_registration: false' in PROVISION,

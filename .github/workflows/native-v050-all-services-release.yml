@@ -183,14 +183,14 @@ jobs:
               if ($raw -notmatch 'tempFile\.Close\(\)') {
                 $needle = '	err = os.Rename(tempFile.Name(), configPath)'
                 if ($raw.Contains($needle)) {
-                  $replacement = @'
-	err = tempFile.Close()
-	if err != nil {
-		_ = os.Remove(tempFile.Name())
-		return output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)
-	}
-	err = os.Rename(tempFile.Name(), configPath)
-'@
+                  $replacement = @(
+                    'err = tempFile.Close()',
+                    'if err != nil {',
+                    '    _ = os.Remove(tempFile.Name())',
+                    '    return output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)',
+                    '}',
+                    'err = os.Rename(tempFile.Name(), configPath)'
+                  ) -join [Environment]::NewLine
                   $raw = $raw.Replace($needle, $replacement.Trim())
                   Set-Content $upgrade -Value $raw -NoNewline -Encoding utf8
                   gofmt -w $upgrade

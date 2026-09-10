@@ -1,0 +1,50 @@
+name: Native Runtime Probe
+
+on:
+  push:
+    branches:
+      - native-runtime
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tuwunel-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Checkout Tuwunel
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch v1.9.0 https://github.com/matrix-construct/tuwunel.git vendor/tuwunel
+
+      - name: Configure native build environment
+        shell: pwsh
+        run: |
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Tuwunel for Windows
+        working-directory: vendor/tuwunel
+        shell: pwsh
+        run: cargo build --release --all-features
+
+      - name: Locate binary
+        shell: pwsh
+        run: |
+          $bin = Get-ChildItem vendor/tuwunel/target/release -Filter 'tuwunel.exe' -Recurse | Select-Object -First 1
+          if (-not $bin) { throw 'tuwunel.exe was not produced' }
+          New-Item -ItemType Directory -Force -Path native-runtime-artifact | Out-Null
+          Copy-Item $bin.FullName native-runtime-artifact/tuwunel.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuwunel-windows-native
+          path: native-runtime-artifact/tuwunel.exe
+          if-no-files-found: error
+          retention-days: 3

@@ -709,7 +709,20 @@ impl NativeRuntimeManager {
             YamlValue::String("admin".to_string()),
         );
         set_yaml(bridge, "permissions", YamlValue::Mapping(permissions));
+        if connector.adapter == "legacy-go" || connector.adapter == "python-legacy" {
+            if let Some(provisioning) = mapping_child_optional(bridge, "provisioning") {
+                // Legacy bridges are connected through their Matrix management
+                // room commands in Unibox, so external provisioning is disabled.
+                set_yaml(
+                    provisioning,
+                    "shared_secret",
+                    YamlValue::String("disable".to_string()),
+                );
+            }
+        }
 
+        // End the mutable bridge subtree borrow before touching other root
+        // sections. This keeps the config patcher valid for Rust's aliasing rules.
         if connector.id == "telegram" {
             let credentials = self.telegram_app_credentials()?;
             set_yaml(root, "api_id", YamlValue::Number(credentials.api_id.into()));
@@ -726,17 +739,6 @@ impl NativeRuntimeManager {
         if let Some(provisioning) = mapping_child_optional(root, "provisioning") {
             if is_bridgev2_connector(connector) {
                 set_yaml(provisioning, "allow_matrix_auth", YamlValue::Bool(true));
-            }
-        }
-        if connector.adapter == "legacy-go" || connector.adapter == "python-legacy" {
-            if let Some(provisioning) = mapping_child_optional(bridge, "provisioning") {
-                // Legacy bridges are connected through their Matrix management
-                // room commands in Unibox, so external provisioning is disabled.
-                set_yaml(
-                    provisioning,
-                    "shared_secret",
-                    YamlValue::String("disable".to_string()),
-                );
             }
         }
 

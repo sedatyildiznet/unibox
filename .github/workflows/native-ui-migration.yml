@@ -1,4 +1,4 @@
-name: Native UI Migration
+name: Native UI Gate
 
 on:
   push:
@@ -10,39 +10,61 @@ permissions:
   contents: write
 
 jobs:
-  migrate-copy:
+  native-copy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: native-runtime
-      - name: Replace WSL onboarding copy
+
+      - name: Migrate legacy WSL copy when present
         shell: python
         run: |
           from pathlib import Path
 
           path = Path('apps/desktop/src/ui/App.tsx')
           text = path.read_text(encoding='utf-8')
-          old_body = '''            Unibox stores its Matrix database, connector sessions, media and settings on this PC
-            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.'''
-          new_body = '''            Unibox stores its message database, connector sessions, media and settings on this PC
-            inside a private native Windows runtime managed automatically by Unibox.'''
-          old_note = '''            Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows
-            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.'''
-          new_note = '''            Windows 10/11 x64. No WSL, Docker, Hyper-V, PostgreSQL, Python or separate runtime
-            installation is required. The local engine is bundled and managed by Unibox.'''
-          if old_body not in text or old_note not in text:
-              raise SystemExit('Expected WSL onboarding copy was not found; refusing a partial rewrite.')
-          text = text.replace(old_body, new_body).replace(old_note, new_note)
+
+          replacements = {
+              'Unibox stores its Matrix database, connector sessions, media and settings on this PC\n            inside an isolated <strong>UniboxRuntime</strong> WSL2 distribution.':
+                  'Unibox stores its message database, connector sessions, media and settings on this PC\n            inside a private native Windows runtime managed automatically by Unibox.',
+              'Windows 10/11 with WSL2 is required. If WSL2 is disabled, Unibox can request Windows\n            elevation to enable it. The official Ubuntu rootfs is SHA-256 verified before import.':
+                  'Windows 10/11 x64. No WSL, Docker, Hyper-V, PostgreSQL, Python or separate runtime\n            installation is required. The local engine is bundled and managed by Unibox.',
+              '<span>Synapse, PostgreSQL, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>':
+                  '<span>The native Matrix engine, connector sessions, message history and media live on this device. Unibox has no central chat-storage service.</span>',
+              '<div className="settingsRow"><span>Synapse</span><b>{runtime.synapse_ready ? \'Running\' : \'Stopped\'}</b></div>':
+                  '<div className="settingsRow"><span>Local Matrix engine</span><b>{runtime.synapse_ready ? \'Running\' : \'Stopped\'}</b></div>',
+          }
+
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+
           path.write_text(text, encoding='utf-8', newline='\n')
-      - name: Commit migration
+
+      - name: Validate native-only onboarding
+        shell: python
+        run: |
+          from pathlib import Path
+          text = Path('apps/desktop/src/ui/App.tsx').read_text(encoding='utf-8')
+          forbidden = [
+              'UniboxRuntime</strong> WSL2',
+              'Windows 10/11 with WSL2 is required',
+              'official Ubuntu rootfs',
+              'Synapse, PostgreSQL, connector sessions',
+          ]
+          found = [item for item in forbidden if item in text]
+          if found:
+              raise SystemExit('Legacy runtime copy remains: ' + ', '.join(found))
+
+      - name: Commit migration if needed
         shell: bash
         run: |
           if git diff --quiet -- apps/desktop/src/ui/App.tsx; then
+            echo "Native UI already clean."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apps/desktop/src/ui/App.tsx
-          git commit -m "ui: remove WSL requirements from native onboarding"
+          git commit -m "ui: finish native Windows runtime copy migration"
           git push origin HEAD:native-runtime

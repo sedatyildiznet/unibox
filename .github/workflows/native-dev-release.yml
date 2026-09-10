@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - native-runtime
+    paths:
+      - '.github/workflows/native-dev-release.yml'
   workflow_dispatch:
 
 permissions:

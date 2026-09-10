@@ -37,6 +37,14 @@ struct NativeSecrets {
     matrix_password: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ConnectorLocalSettings {
+    #[serde(default)]
+    api_id: Option<i64>,
+    #[serde(default)]
+    api_hash: Option<String>,
+}
+
 #[derive(Default)]
 struct ChildProcesses {
     homeserver: Option<Child>,
@@ -154,6 +162,82 @@ impl NativeRuntimeManager {
         let raw =
             fs::read_to_string(self.session_path()).context("local Matrix session is not ready")?;
         serde_json::from_str(&raw).context("invalid local Matrix session")
+    }
+
+    pub fn connector_available(&self, connector: &ConnectorDefinition) -> bool {
+        is_native_bridge(connector) && self.connector_executable(connector).is_file()
+    }
+
+    pub fn connector_requirements(&self, connector: &ConnectorDefinition) -> serde_json::Value {
+        if connector.id != "telegram" {
+            return json!({"required": false, "fields": []});
+        }
+        let settings = self.load_connector_settings(connector).unwrap_or_default();
+        let configured = settings.api_id.unwrap_or_default() > 0
+            && settings.api_hash.as_deref().map(str::trim).map(str::len) == Some(32);
+        json!({
+            "required": !configured,
+            "fields": [
+                {
+                    "id": "api_id",
+                    "name": "Telegram API ID",
+                    "type": "text",
+                    "description": "Create an app at my.telegram.org/apps and enter its numeric API ID."
+                },
+                {
+                    "id": "api_hash",
+                    "name": "Telegram API Hash",
+                    "type": "password",
+                    "description": "Enter the 32-character API hash from my.telegram.org/apps."
+                }
+            ],
+            "help": "Telegram requires each third-party client to use an API ID and API hash from my.telegram.org/apps. These values are stored only in your local Unibox data."
+        })
+    }
+
+    pub fn configure_connector(
+        &self,
+        connector: &ConnectorDefinition,
+        settings: serde_json::Value,
+    ) -> Result<String> {
+        self.require_native_connector(connector)?;
+        if connector.id != "telegram" {
+            return Ok(format!("{} does not require pre-connection settings.", connector.name));
+        }
+
+        let api_id = settings
+            .get("api_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .parse::<i64>()
+            .context("Telegram API ID must be a positive number")?;
+        if api_id <= 0 {
+            return Err(anyhow!("Telegram API ID must be a positive number"));
+        }
+        let api_hash = settings
+            .get("api_hash")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if api_hash.len() != 32 || !api_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(anyhow!("Telegram API hash must be exactly 32 hexadecimal characters"));
+        }
+
+        let state = self.connector_state(connector);
+        fs::create_dir_all(&state)?;
+        let local = ConnectorLocalSettings {
+            api_id: Some(api_id),
+            api_hash: Some(api_hash),
+        };
+        self.write_json_atomic(&self.connector_settings_path(connector), &local)?;
+
+        let config = self.connector_config(connector);
+        if config.is_file() {
+            self.patch_connector_config(connector, &config)?;
+        }
+        Ok("Telegram API credentials saved locally.".to_string())
     }
 
     pub fn connector_status(&self, connector: &ConnectorDefinition) -> ConnectorStatus {
@@ -298,9 +382,12 @@ impl NativeRuntimeManager {
         };
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .context("invalid provisioning method")?;
+        let mut url = Url::parse(&format!("{base}{suffix}"))
+            .context("invalid local bridge provisioning URL")?;
+        url.query_pairs_mut().append_pair("user_id", &session.user_id);
         let mut request = self
             .http
-            .request(method, format!("{base}{suffix}"))
+            .request(method, url)
             .bearer_auth(session.access_token);
         if let Some(body) = body {
             request = request.json(&body);
@@ -537,15 +624,15 @@ impl NativeRuntimeManager {
     }
 
     fn require_native_connector(&self, connector: &ConnectorDefinition) -> Result<()> {
-        if !matches!(connector.id.as_str(), "whatsapp" | "telegram") {
+        if !is_native_bridge(connector) {
             return Err(anyhow!(
-                "{} has not passed the native Windows connector gate yet. This build currently enables WhatsApp and Telegram only.",
+                "{} is not using the native BridgeV2 adapter in this Windows build.",
                 connector.name
             ));
         }
-        if !is_native_bridge(connector) {
+        if !self.connector_executable(connector).is_file() {
             return Err(anyhow!(
-                "{} is not a native BridgeV2 connector.",
+                "{} native connector binary is not bundled in this build.",
                 connector.name
             ));
         }
@@ -617,6 +704,21 @@ impl NativeRuntimeManager {
             YamlValue::String("admin".to_string()),
         );
         set_yaml(bridge, "permissions", YamlValue::Mapping(permissions));
+
+        if connector.id == "telegram" {
+            let settings = self.load_connector_settings(connector)?;
+            let api_id = settings
+                .api_id
+                .filter(|value| *value > 0)
+                .ok_or_else(|| anyhow!("Telegram API ID is not configured"))?;
+            let api_hash = settings
+                .api_hash
+                .filter(|value| value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+                .ok_or_else(|| anyhow!("Telegram API hash is not configured"))?;
+            let network = mapping_child(root, "network");
+            set_yaml(network, "api_id", YamlValue::Number(api_id.into()));
+            set_yaml(network, "api_hash", YamlValue::String(api_hash));
+        }
 
         if let Some(matrix) = mapping_child_optional(root, "matrix") {
             set_yaml(matrix, "federate_rooms", YamlValue::Bool(false));
@@ -787,6 +889,19 @@ impl NativeRuntimeManager {
     fn session_path(&self) -> PathBuf {
         self.data_root.join("matrix-session.json")
     }
+    fn load_connector_settings(&self, connector: &ConnectorDefinition) -> Result<ConnectorLocalSettings> {
+        let path = self.connector_settings_path(connector);
+        if !path.is_file() {
+            return Ok(ConnectorLocalSettings::default());
+        }
+        serde_json::from_str(&fs::read_to_string(&path)?)
+            .with_context(|| format!("invalid local settings for {}", connector.name))
+    }
+
+    fn connector_settings_path(&self, connector: &ConnectorDefinition) -> PathBuf {
+        self.connector_state(connector).join("unibox-settings.json")
+    }
+
     fn connector_state(&self, connector: &ConnectorDefinition) -> PathBuf {
         self.data_root.join("connectors").join(&connector.id)
     }

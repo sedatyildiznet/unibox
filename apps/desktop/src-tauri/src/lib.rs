@@ -81,8 +81,11 @@ fn repair_telegram_root_credentials(data_root: &str) -> Result<(), String> {
         serde_yaml::Value::String("api_hash".to_string()),
         serde_yaml::Value::String(api_hash.to_string()),
     );
-    fs::write(&config_path, serde_yaml::to_string(&config).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("failed to write Telegram config: {error}"))?;
+    fs::write(
+        &config_path,
+        serde_yaml::to_string(&config).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("failed to write Telegram config: {error}"))?;
     Ok(())
 }
 
@@ -173,7 +176,8 @@ async fn connector_install(id: String, state: State<'_, AppState>) -> Result<Str
 
                 if connector.id == "telegram"
                     && !telegram_repaired
-                    && (lower.contains("api_hash is required") || lower.contains("api_id is required"))
+                    && (lower.contains("api_hash is required")
+                        || lower.contains("api_id is required"))
                 {
                     let runtime = state.runtime.status().await;
                     repair_telegram_root_credentials(&runtime.data_root)?;

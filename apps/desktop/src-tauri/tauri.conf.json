@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Unibox",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "identifier": "app.unibox.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -31,7 +31,7 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
-    "resources": ["resources/native-v033/**/*"],
+    "resources": ["resources/native-v034/**/*"],
     "windows": {
       "wix": { "language": "en-US" },
       "nsis": {

@@ -202,7 +202,7 @@ pub fn run() {
         .setup(|app| {
             let data_root = normalize_windows_path(app.path().app_local_data_dir()?);
             let resource_root =
-                normalize_windows_path(app.path().resource_dir()?.join("resources").join("native"));
+                normalize_windows_path(app.path().resource_dir()?.join("resources").join("native-v033"));
             let runtime = NativeRuntimeManager::new(data_root, resource_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;
             app.manage(AppState { runtime, registry });

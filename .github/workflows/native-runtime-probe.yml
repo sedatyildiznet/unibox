@@ -9,19 +9,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-runtime-probe
+  cancel-in-progress: true
+
 jobs:
   tuwunel-windows:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Checkout Tuwunel
         shell: pwsh
-        run: |
-          git clone --depth 1 --branch v1.9.0 https://github.com/matrix-construct/tuwunel.git vendor/tuwunel
+        run: git clone --depth 1 --branch v1.9.0 https://github.com/matrix-construct/tuwunel.git vendor/tuwunel
 
       - name: Configure native build environment
         shell: pwsh
@@ -46,5 +48,45 @@ jobs:
         with:
           name: tuwunel-windows-native
           path: native-runtime-artifact/tuwunel.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  bridge-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: whatsapp
+            repo: mautrix/whatsapp
+            ref: v0.2608.0
+            output: mautrix-whatsapp.exe
+          - id: telegram
+            repo: mautrix/telegram
+            ref: v0.2608.0
+            output: mautrix-telegram.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+
+      - name: Checkout bridge
+        shell: pwsh
+        run: git clone --depth 1 --branch ${{ matrix.ref }} https://github.com/${{ matrix.repo }}.git vendor/bridge
+
+      - name: Build bridge for Windows
+        working-directory: vendor/bridge
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -ldflags="-s -w" -o ../../native-runtime-artifact/${{ matrix.output }} .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-${{ matrix.id }}-windows-native
+          path: native-runtime-artifact/${{ matrix.output }}
           if-no-files-found: error
           retention-days: 3

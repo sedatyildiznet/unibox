@@ -13,6 +13,7 @@ $DownloadDir = Join-Path $DataRoot 'downloads'
 $DistroDir = Join-Path $DataRoot 'wsl'
 $RootfsPath = Join-Path $DownloadDir $RootfsName
 $SumPath = Join-Path $DownloadDir 'SHA256SUMS'
+$RuntimeDiskPath = Join-Path $DistroDir 'ext4.vhdx'
 
 function Invoke-WslNative {
     param(
@@ -163,8 +164,47 @@ function Test-DistroExists {
     return ($distros | ForEach-Object { $_.Trim() }) -contains $Distro
 }
 
+function Remove-UnregisteredPartialRuntime {
+    # Safe recovery only: if WSL does not know this distro, a leftover directory
+    # can only be debris from an interrupted/failed import.
+    if ((-not (Test-DistroExists)) -and (Test-Path $DistroDir)) {
+        Remove-Item $DistroDir -Recurse -Force -ErrorAction Stop
+    }
+}
+
+function Reset-StaleRuntimeRegistration {
+    # A registered distro whose ext4.vhdx is gone cannot contain usable local
+    # data. This is a stale registration left by an interrupted import. It is
+    # safe to unregister and recreate it from the verified Ubuntu rootfs.
+    if (-not (Test-DistroExists)) {
+        return $false
+    }
+
+    if (Test-Path $RuntimeDiskPath) {
+        return $false
+    }
+
+    Write-Output 'UniboxRuntime is registered in WSL but its virtual disk is missing. Rebuilding the incomplete runtime...'
+    $unregister = Invoke-WslNative -Arguments @('--unregister', $Distro)
+    if ($unregister.ExitCode -ne 0 -and (Test-DistroExists)) {
+        $details = if ($unregister.Text) { $unregister.Text } else { "wsl.exe exit code $($unregister.ExitCode)" }
+        throw "Could not remove the incomplete UniboxRuntime registration: $details"
+    }
+
+    if (Test-Path $DistroDir) {
+        Remove-Item $DistroDir -Recurse -Force -ErrorAction Stop
+    }
+    return $true
+}
+
 function Ensure-ExistingRuntimeHealthy {
     if (-not (Test-DistroExists)) {
+        return $false
+    }
+
+    # Check this before starting the distro. It handles the exact case where WSL
+    # still lists UniboxRuntime but the ext4.vhdx from a failed import is missing.
+    if (Reset-StaleRuntimeRegistration) {
         return $false
     }
 
@@ -181,17 +221,17 @@ function Ensure-ExistingRuntimeHealthy {
         }
     }
 
-    $details = if ($probe.Text) { $probe.Text } else { "wsl.exe exit code $($probe.ExitCode)" }
-    throw "The existing UniboxRuntime could not start. Its local data was preserved and was not deleted. Restart Windows and try again. Details: $details"
-}
-
-function Remove-UnregisteredPartialRuntime {
-    # Safe recovery only: if WSL does not know this distro, a leftover directory
-    # can only be debris from an interrupted/failed import. Never unregister an
-    # existing distro here because it may contain the user's local messages.
-    if ((-not (Test-DistroExists)) -and (Test-Path $DistroDir)) {
-        Remove-Item $DistroDir -Recurse -Force -ErrorAction Stop
+    # Some WSL versions report a stale registration only when they try to mount
+    # the disk. If the mount error confirms the expected disk is missing, rebuild
+    # automatically rather than telling the user to reboot forever.
+    if (($probe.Text -match 'ERROR_PATH_NOT_FOUND|MountDisk|system cannot find the path specified|Sistem belirtilen yolu bulam') -and -not (Test-Path $RuntimeDiskPath)) {
+        if (Reset-StaleRuntimeRegistration) {
+            return $false
+        }
     }
+
+    $details = if ($probe.Text) { $probe.Text } else { "wsl.exe exit code $($probe.ExitCode)" }
+    throw "The existing UniboxRuntime could not start. Its local data was preserved and was not deleted. Details: $details"
 }
 
 function Download-Rootfs {
@@ -277,10 +317,12 @@ function Invoke-Main {
     Ensure-Wsl
     New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
 
+    $runtimeReady = $false
     if (Test-DistroExists) {
-        [void](Ensure-ExistingRuntimeHealthy)
+        $runtimeReady = Ensure-ExistingRuntimeHealthy
     }
-    else {
+
+    if (-not $runtimeReady) {
         Remove-UnregisteredPartialRuntime
         Download-Rootfs
         Import-Runtime

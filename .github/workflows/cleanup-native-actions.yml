@@ -15,7 +15,7 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Cancel stale native-runtime workflow runs
         env:
@@ -23,9 +23,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=native-runtime&per_page=100"             --jq '.workflow_runs[] | select((.status == "queued" or .status == "in_progress" or .status == "pending") and .name != "Native Missing Connectors Probe" and .name != "Native Actions Cleanup") | .id' |
-          while read -r id; do
-            [ -z "$id" ] && continue
-            echo "Cancelling stale run $id"
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" || true
+
+          keep_missing="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=native-runtime&per_page=100"             --jq '[.workflow_runs[] | select(.name == "Native Missing Connectors Probe" and (.status == "queued" or .status == "in_progress" or .status == "pending")) | .id] | max // 0')"
+          echo "Keeping newest missing-connector probe: $keep_missing"
+
+          for page in $(seq 1 10); do
+            data="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=native-runtime&per_page=100&page=$page")"
+            count="$(jq '.workflow_runs | length' <<<"$data")"
+            [ "$count" -eq 0 ] && break
+
+            jq -r --argjson keep "$keep_missing" '
+              .workflow_runs[]
+              | select(.status == "queued" or .status == "in_progress" or .status == "pending")
+              | select(.name != "Native Actions Cleanup")
+              | select(.name != "Native Missing Connectors Probe" or .id != $keep)
+              | .id
+            ' <<<"$data" |
+            while read -r id; do
+              [ -z "$id" ] && continue
+              echo "Cancelling stale run $id"
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/$id/cancel" >/dev/null || true
+            done
           done

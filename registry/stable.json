@@ -109,7 +109,7 @@
     "description": "Legacy Python Google Chat bridge.",
     "multi_account": true,
     "bot_localpart": "googlechatbot",
-    "legacy_login": "login"
+    "legacy_login": "login-cookie"
   },
   {
     "id": "slack",

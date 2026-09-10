@@ -322,28 +322,28 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-tuwunel
-          path: apps/desktop/src-tauri/resources/native-v034
+          path: apps/desktop/src-tauri/resources/native-v040
 
       - name: Download every native connector that passed the Windows build gate
         uses: actions/download-artifact@v4
         with:
           pattern: native-bridge-*
-          path: apps/desktop/src-tauri/resources/native-v034/connectors
+          path: apps/desktop/src-tauri/resources/native-v040/connectors
           merge-multiple: true
 
       - name: Verify packaged native resources
         shell: pwsh
         run: |
           $required = @(
-            'apps/desktop/src-tauri/resources/native-v034/tuwunel.exe',
-            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-telegram.exe'
+            'apps/desktop/src-tauri/resources/native-v040/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native-v040/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native-v040/connectors/mautrix-telegram.exe'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) { throw "Missing required native resource: $path" }
           }
           Write-Host 'Native connector binaries included in this installer:'
-          Get-ChildItem 'apps/desktop/src-tauri/resources/native-v034/connectors/*.exe' |
+          Get-ChildItem 'apps/desktop/src-tauri/resources/native-v040/connectors/*.exe' |
             Sort-Object Name |
             ForEach-Object { Write-Host (" - " + $_.Name) }
 
@@ -386,7 +386,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = 'v0.3.0-native-dev'
+          $tag = 'v0.4.0-native-all'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
@@ -404,4 +404,4 @@ jobs:
 
           This is an unsigned development build. The desktop UI exposes every connector binary that actually passed the native Windows build gate and was bundled into the installer. Legacy Python-only Google Chat and legacy Discord are not falsely advertised as native BridgeV2 connectors.
           "@
-          gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox v0.3.0 Native Windows Dev' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          gh release create $tag dist-native/* --target $env:GITHUB_SHA --title 'Unibox v0.4.0 Native Windows All Services' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

@@ -219,7 +219,10 @@ impl NativeRuntimeManager {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| anyhow!("Google Chat {output} cookie is required"))?;
-                cookies.insert(output.to_string(), serde_json::Value::String(value.to_string()));
+                cookies.insert(
+                    output.to_string(),
+                    serde_json::Value::String(value.to_string()),
+                );
             }
             return Ok(format!(
                 "login-cookie {}",
@@ -330,7 +333,11 @@ impl NativeRuntimeManager {
             .connectors
             .insert(connector.id.clone(), child);
 
-        let attempts = if connector.adapter == "python-legacy" { 240 } else { 80 };
+        let attempts = if connector.adapter == "python-legacy" {
+            240
+        } else {
+            80
+        };
         for _ in 0..attempts {
             if port_open(connector.port) {
                 return Ok(format!("{} connector started.", connector.name));

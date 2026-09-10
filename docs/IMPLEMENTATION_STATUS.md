@@ -13,10 +13,10 @@ The current work improves the engineering build; it is not a production-complete
 - Text, files, replies, edits, deletion confirmation, reaction counts, typing and read status in the inbox.
 - Bounded history expansion, event-driven refresh, notification opt-in and per-room notification mute.
 - Python update environments keep their original filesystem paths to preserve interpreter references.
-
 - Version-matched backups with PostgreSQL dumps, validated restores and pre-restore recovery snapshots.
 - System tray, optional close-to-tray, Windows startup and start-minimized preferences.
 - Allowlisted diagnostic report export without raw logs or session material.
+- Typed BridgeV2 account lifecycle primitives for listing existing logins, re-login and logout.
 
 ## Verification boundaries
 
@@ -25,7 +25,7 @@ Unit tests and build checks do not establish external-provider compatibility. Wi
 ## Still required before a stable release
 
 - Real Windows acceptance and live WhatsApp/Telegram multi-account messaging tests.
-- Provider-specific capability discovery and account rename/reconnect/logout management.
+- Provider-specific capability discovery and settings UI for account rename, re-login and logout management.
 - Full legacy Discord/Google Chat login acceptance and per-provider maturity review.
 - Database-aware connector rollback; current binary/venv rollback cannot reverse schema migrations.
 - Windows acceptance of backup/restore, forced-shutdown recovery acceptance, optional encryption and desktop-preference backup.

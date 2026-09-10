@@ -26,6 +26,10 @@ impl AppState {
     }
 }
 
+fn is_exposed_native_connector(connector: &ConnectorDefinition) -> bool {
+    matches!(connector.id.as_str(), "whatsapp" | "telegram")
+}
+
 #[cfg(target_os = "windows")]
 fn normalize_windows_path(path: PathBuf) -> PathBuf {
     let raw = path.to_string_lossy();
@@ -45,7 +49,12 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
 
 #[tauri::command]
 fn connector_registry(state: State<'_, AppState>) -> Vec<ConnectorDefinition> {
-    state.registry.clone()
+    state
+        .registry
+        .iter()
+        .filter(|connector| is_exposed_native_connector(connector))
+        .cloned()
+        .collect()
 }
 
 #[tauri::command]

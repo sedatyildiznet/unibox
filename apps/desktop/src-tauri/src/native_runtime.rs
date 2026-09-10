@@ -117,12 +117,18 @@ impl NativeRuntimeManager {
         let mut command = Command::new(&executable);
         command.arg("-c").arg(&config);
         command.current_dir(&self.data_root);
-        command.stdin(Stdio::null()).stdout(Stdio::from(log)).stderr(Stdio::from(stderr));
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr));
         hide_console(&mut command);
         let child = command
             .spawn()
             .with_context(|| format!("failed to start {}", executable.display()))?;
-        self.children.lock().map_err(|_| anyhow!("runtime process lock poisoned"))?.homeserver = Some(child);
+        self.children
+            .lock()
+            .map_err(|_| anyhow!("runtime process lock poisoned"))?
+            .homeserver = Some(child);
 
         for _ in 0..60 {
             if self.matrix_ready().await {
@@ -144,7 +150,8 @@ impl NativeRuntimeManager {
     }
 
     pub fn matrix_session(&self) -> Result<MatrixSession> {
-        let raw = fs::read_to_string(self.session_path()).context("local Matrix session is not ready")?;
+        let raw =
+            fs::read_to_string(self.session_path()).context("local Matrix session is not ready")?;
         serde_json::from_str(&raw).context("invalid local Matrix session")
     }
 
@@ -181,7 +188,12 @@ impl NativeRuntimeManager {
         let registration = state.join("registration.yaml");
 
         if !config.is_file() {
-            self.run_connector_command(connector, &["-e", "-c"], Some(&config), "example config generation")?;
+            self.run_connector_command(
+                connector,
+                &["-e", "-c"],
+                Some(&config),
+                "example config generation",
+            )?;
         }
         self.patch_connector_config(connector, &config)?;
         if registration.exists() {
@@ -194,7 +206,9 @@ impl NativeRuntimeManager {
             "appservice registration generation",
         )?;
 
-        let appservice_target = self.appservice_dir().join(format!("unibox-{}.yaml", connector.id));
+        let appservice_target = self
+            .appservice_dir()
+            .join(format!("unibox-{}.yaml", connector.id));
         fs::copy(&registration, &appservice_target)
             .with_context(|| format!("failed to install {}", appservice_target.display()))?;
 
@@ -213,7 +227,10 @@ impl NativeRuntimeManager {
         let executable = self.connector_executable(connector);
         let config = self.connector_config(connector);
         if !executable.is_file() || !config.is_file() {
-            return Err(anyhow!("{} native connector is not installed.", connector.name));
+            return Err(anyhow!(
+                "{} native connector is not installed.",
+                connector.name
+            ));
         }
 
         let state = self.connector_state(connector);
@@ -222,7 +239,10 @@ impl NativeRuntimeManager {
         let mut command = Command::new(&executable);
         command.arg("-c").arg(&config);
         command.current_dir(&state);
-        command.stdin(Stdio::null()).stdout(Stdio::from(log)).stderr(Stdio::from(stderr));
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr));
         hide_console(&mut command);
         let child = command
             .spawn()
@@ -270,42 +290,69 @@ impl NativeRuntimeManager {
         self.require_native_connector(connector)?;
         let session = self.matrix_session()?;
         let base = format!("http://127.0.0.1:{}/_matrix/provision", connector.port);
-        let suffix = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
-        let method = reqwest::Method::from_bytes(method.as_bytes()).context("invalid provisioning method")?;
-        let mut request = self.http.request(method, format!("{base}{suffix}")).bearer_auth(session.access_token);
+        let suffix = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{path}")
+        };
+        let method = reqwest::Method::from_bytes(method.as_bytes())
+            .context("invalid provisioning method")?;
+        let mut request = self
+            .http
+            .request(method, format!("{base}{suffix}"))
+            .bearer_auth(session.access_token);
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request.send().await.context("bridge provisioning request failed")?;
+        let response = request
+            .send()
+            .await
+            .context("bridge provisioning request failed")?;
         let status = response.status();
-        let text = response.text().await.context("failed to read bridge response")?;
+        let text = response
+            .text()
+            .await
+            .context("failed to read bridge response")?;
         let value: serde_json::Value = if text.trim().is_empty() {
             json!({})
         } else {
             serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}))
         };
         if !status.is_success() {
-            return Err(anyhow!("bridge provisioning returned {}: {}", status, value));
+            return Err(anyhow!(
+                "bridge provisioning returned {}: {}",
+                status,
+                value
+            ));
         }
         Ok(value)
     }
 
     pub async fn client_http(&self, input: ClientHttpRequest) -> Result<ClientHttpResponse> {
         let mut url = Url::parse(&input.url).context("invalid connector client HTTP URL")?;
-        let mut method = reqwest::Method::from_bytes(input.method.as_bytes()).context("invalid client HTTP method")?;
+        let mut method = reqwest::Method::from_bytes(input.method.as_bytes())
+            .context("invalid client HTTP method")?;
         let mut body = input
             .body
-            .map(|value| BASE64.decode(value).context("invalid base64 client HTTP body"))
+            .map(|value| {
+                BASE64
+                    .decode(value)
+                    .context("invalid base64 client HTTP body")
+            })
             .transpose()?;
 
         for _ in 0..6 {
             ensure_public_remote_url(&url).await?;
             let mut request = self.remote_http.request(method.clone(), url.clone());
             for (name, values) in &input.headers {
-                if matches!(name.to_ascii_lowercase().as_str(), "host" | "content-length" | "connection") {
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "host" | "content-length" | "connection"
+                ) {
                     continue;
                 }
-                let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes()).context("invalid client HTTP header")?;
+                let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .context("invalid client HTTP header")?;
                 for value in values {
                     request = request.header(header_name.clone(), value.as_str());
                 }
@@ -313,7 +360,11 @@ impl NativeRuntimeManager {
             if let Some(bytes) = &body {
                 request = request.body(bytes.clone());
             }
-            let response = self.remote_http.execute(request.build()?).await.context("connector client HTTP request failed")?;
+            let response = self
+                .remote_http
+                .execute(request.build()?)
+                .await
+                .context("connector client HTTP request failed")?;
             let status = response.status();
             if status.is_redirection() {
                 let location = response
@@ -339,10 +390,16 @@ impl NativeRuntimeManager {
             let mut headers: HashMap<String, Vec<String>> = HashMap::new();
             for (name, value) in response.headers() {
                 if let Ok(value) = value.to_str() {
-                    headers.entry(name.as_str().to_string()).or_default().push(value.to_string());
+                    headers
+                        .entry(name.as_str().to_string())
+                        .or_default()
+                        .push(value.to_string());
                 }
             }
-            let bytes = response.bytes().await.context("failed to read client HTTP response")?;
+            let bytes = response
+                .bytes()
+                .await
+                .context("failed to read client HTTP response")?;
             return Ok(ClientHttpResponse {
                 status_code,
                 final_url,
@@ -384,7 +441,8 @@ impl NativeRuntimeManager {
     fn load_or_create_secrets(&self) -> Result<NativeSecrets> {
         let path = self.secrets_path();
         if path.is_file() {
-            return serde_json::from_str(&fs::read_to_string(path)?).context("invalid native runtime secrets");
+            return serde_json::from_str(&fs::read_to_string(path)?)
+                .context("invalid native runtime secrets");
         }
         let secrets = NativeSecrets {
             registration_shared_secret: random_secret(64),
@@ -397,16 +455,27 @@ impl NativeRuntimeManager {
     async fn provision_matrix_identity(&self) -> Result<MatrixSession> {
         let secrets = self.load_or_create_secrets()?;
         let register_url = format!("{MATRIX_URL}/_synapse/admin/v1/register");
-        let nonce_response = self.http.get(&register_url).send().await.context("failed to request local registration nonce")?;
+        let nonce_response = self
+            .http
+            .get(&register_url)
+            .send()
+            .await
+            .context("failed to request local registration nonce")?;
         if !nonce_response.status().is_success() {
-            return Err(anyhow!("local Matrix nonce request failed with {}", nonce_response.status()));
+            return Err(anyhow!(
+                "local Matrix nonce request failed with {}",
+                nonce_response.status()
+            ));
         }
         let nonce_json: serde_json::Value = nonce_response.json().await?;
         let nonce = nonce_json
             .get("nonce")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("local Matrix registration nonce is missing"))?;
-        let payload = format!("{nonce}\0{MATRIX_USER}\0{}\0notadmin", secrets.matrix_password);
+        let payload = format!(
+            "{nonce}\0{MATRIX_USER}\0{}\0notadmin",
+            secrets.matrix_password
+        );
         let mut mac = HmacSha1::new_from_slice(secrets.registration_shared_secret.as_bytes())?;
         mac.update(payload.as_bytes());
         let mac = hex::encode(mac.finalize().into_bytes());
@@ -448,7 +517,11 @@ impl NativeRuntimeManager {
         let status = login.status();
         let value: serde_json::Value = login.json().await.unwrap_or_else(|_| json!({}));
         if !status.is_success() {
-            return Err(anyhow!("local Matrix identity provisioning failed with {}: {}", status, value));
+            return Err(anyhow!(
+                "local Matrix identity provisioning failed with {}: {}",
+                status,
+                value
+            ));
         }
         session_from_login(value)
     }
@@ -470,31 +543,69 @@ impl NativeRuntimeManager {
             ));
         }
         if !is_native_bridge(connector) {
-            return Err(anyhow!("{} is not a native BridgeV2 connector.", connector.name));
+            return Err(anyhow!(
+                "{} is not a native BridgeV2 connector.",
+                connector.name
+            ));
         }
         Ok(())
     }
 
     fn patch_connector_config(&self, connector: &ConnectorDefinition, path: &Path) -> Result<()> {
         let raw = fs::read_to_string(path)?;
-        let mut cfg: YamlValue = serde_yaml::from_str(&raw).context("invalid connector config YAML")?;
-        let root = cfg.as_mapping_mut().ok_or_else(|| anyhow!("connector config root is not a mapping"))?;
+        let mut cfg: YamlValue =
+            serde_yaml::from_str(&raw).context("invalid connector config YAML")?;
+        let root = cfg
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow!("connector config root is not a mapping"))?;
 
         let homeserver = mapping_child(root, "homeserver");
-        set_yaml(homeserver, "address", YamlValue::String(MATRIX_URL.to_string()));
-        set_yaml(homeserver, "domain", YamlValue::String("unibox.local".to_string()));
-        set_yaml(homeserver, "software", YamlValue::String("standard".to_string()));
+        set_yaml(
+            homeserver,
+            "address",
+            YamlValue::String(MATRIX_URL.to_string()),
+        );
+        set_yaml(
+            homeserver,
+            "domain",
+            YamlValue::String("unibox.local".to_string()),
+        );
+        set_yaml(
+            homeserver,
+            "software",
+            YamlValue::String("standard".to_string()),
+        );
 
         let appservice = mapping_child(root, "appservice");
-        set_yaml(appservice, "address", YamlValue::String(format!("http://127.0.0.1:{}", connector.port)));
-        set_yaml(appservice, "hostname", YamlValue::String("127.0.0.1".to_string()));
+        set_yaml(
+            appservice,
+            "address",
+            YamlValue::String(format!("http://127.0.0.1:{}", connector.port)),
+        );
+        set_yaml(
+            appservice,
+            "hostname",
+            YamlValue::String("127.0.0.1".to_string()),
+        );
         set_yaml(appservice, "port", YamlValue::Number(connector.port.into()));
-        set_yaml(appservice, "id", YamlValue::String(format!("unibox-{}", connector.id)));
+        set_yaml(
+            appservice,
+            "id",
+            YamlValue::String(format!("unibox-{}", connector.id)),
+        );
 
         let database = mapping_child(root, "database");
-        set_yaml(database, "type", YamlValue::String("sqlite3-fk-wal".to_string()));
+        set_yaml(
+            database,
+            "type",
+            YamlValue::String("sqlite3-fk-wal".to_string()),
+        );
         let db = slash_path(&self.connector_state(connector).join("bridge.db"));
-        set_yaml(database, "uri", YamlValue::String(format!("file:{db}?_txlock=immediate")));
+        set_yaml(
+            database,
+            "uri",
+            YamlValue::String(format!("file:{db}?_txlock=immediate")),
+        );
         set_yaml(database, "max_open_conns", YamlValue::Number(1.into()));
         set_yaml(database, "max_idle_conns", YamlValue::Number(1.into()));
 
@@ -537,7 +648,9 @@ impl NativeRuntimeManager {
         command.current_dir(self.connector_state(connector));
         command.stdin(Stdio::null());
         hide_console(&mut command);
-        let output = command.output().with_context(|| format!("failed to run {label} for {}", connector.name))?;
+        let output = command
+            .output()
+            .with_context(|| format!("failed to run {label} for {}", connector.name))?;
         if !output.status.success() {
             return Err(anyhow!(
                 "{} {} failed: {}{}",
@@ -559,11 +672,18 @@ impl NativeRuntimeManager {
     ) -> Result<()> {
         let executable = self.connector_executable(connector);
         let mut command = Command::new(&executable);
-        command.arg("-g").arg("-c").arg(config).arg("-r").arg(registration);
+        command
+            .arg("-g")
+            .arg("-c")
+            .arg(config)
+            .arg("-r")
+            .arg(registration);
         command.current_dir(self.connector_state(connector));
         command.stdin(Stdio::null());
         hide_console(&mut command);
-        let output = command.output().with_context(|| format!("failed to run {label} for {}", connector.name))?;
+        let output = command
+            .output()
+            .with_context(|| format!("failed to run {label} for {}", connector.name))?;
         if !output.status.success() {
             return Err(anyhow!(
                 "{} {} failed: {}{}",
@@ -592,7 +712,11 @@ impl NativeRuntimeManager {
     fn open_log(&self, name: &str) -> Result<File> {
         let dir = self.data_root.join("logs");
         fs::create_dir_all(&dir)?;
-        OpenOptions::new().create(true).append(true).open(dir.join(name)).map_err(Into::into)
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(name))
+            .map_err(Into::into)
     }
 
     fn open_connector_log(&self, connector: &ConnectorDefinition) -> Result<File> {
@@ -602,7 +726,10 @@ impl NativeRuntimeManager {
     fn log_tail(&self, name: &str, max: usize) -> String {
         let path = self.data_root.join("logs").join(name);
         let mut bytes = Vec::new();
-        if File::open(path).and_then(|mut f| f.read_to_end(&mut bytes)).is_err() {
+        if File::open(path)
+            .and_then(|mut f| f.read_to_end(&mut bytes))
+            .is_err()
+        {
             return "See the Unibox native runtime logs for details.".to_string();
         }
         let text = String::from_utf8_lossy(&bytes);
@@ -666,7 +793,9 @@ impl NativeRuntimeManager {
         self.connector_state(connector).join("config.yaml")
     }
     fn connector_executable(&self, connector: &ConnectorDefinition) -> PathBuf {
-        self.resource_root.join("connectors").join(format!("{}.exe", connector.binary))
+        self.resource_root
+            .join("connectors")
+            .join(format!("{}.exe", connector.binary))
     }
 }
 
@@ -677,29 +806,51 @@ impl Drop for NativeRuntimeManager {
 }
 
 fn session_from_registration(value: serde_json::Value) -> Result<MatrixSession> {
-    let user_id = value.get("user_id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("registration response missing user_id"))?;
-    let access_token = value.get("access_token").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("registration response missing access_token"))?;
+    let user_id = value
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("registration response missing user_id"))?;
+    let access_token = value
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("registration response missing access_token"))?;
     Ok(MatrixSession {
         homeserver: MATRIX_URL.to_string(),
         user_id: user_id.to_string(),
         access_token: access_token.to_string(),
-        device_id: value.get("device_id").and_then(|v| v.as_str()).map(str::to_string),
+        device_id: value
+            .get("device_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     })
 }
 
 fn session_from_login(value: serde_json::Value) -> Result<MatrixSession> {
-    let user_id = value.get("user_id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("login response missing user_id"))?;
-    let access_token = value.get("access_token").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("login response missing access_token"))?;
+    let user_id = value
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("login response missing user_id"))?;
+    let access_token = value
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("login response missing access_token"))?;
     Ok(MatrixSession {
         homeserver: MATRIX_URL.to_string(),
         user_id: user_id.to_string(),
         access_token: access_token.to_string(),
-        device_id: value.get("device_id").and_then(|v| v.as_str()).map(str::to_string),
+        device_id: value
+            .get("device_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     })
 }
 
 fn random_secret(length: usize) -> String {
-    rand::thread_rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
 }
 
 fn slash_path(path: &Path) -> String {
@@ -715,11 +866,14 @@ fn mapping_child<'a>(root: &'a mut Mapping, key: &str) -> &'a mut Mapping {
     if !matches!(root.get(&k), Some(YamlValue::Mapping(_))) {
         root.insert(k.clone(), YamlValue::Mapping(Mapping::new()));
     }
-    root.get_mut(&k).and_then(YamlValue::as_mapping_mut).expect("mapping inserted")
+    root.get_mut(&k)
+        .and_then(YamlValue::as_mapping_mut)
+        .expect("mapping inserted")
 }
 
 fn mapping_child_optional<'a>(root: &'a mut Mapping, key: &str) -> Option<&'a mut Mapping> {
-    root.get_mut(YamlValue::String(key.to_string())).and_then(YamlValue::as_mapping_mut)
+    root.get_mut(YamlValue::String(key.to_string()))
+        .and_then(YamlValue::as_mapping_mut)
 }
 
 fn set_yaml(map: &mut Mapping, key: &str, value: YamlValue) {
@@ -727,7 +881,11 @@ fn set_yaml(map: &mut Mapping, key: &str, value: YamlValue) {
 }
 
 fn port_open(port: u16) -> bool {
-    TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(200)).is_ok()
+    TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(200),
+    )
+    .is_ok()
 }
 
 fn is_native_bridge(connector: &ConnectorDefinition) -> bool {
@@ -747,15 +905,21 @@ fn hide_console(command: &mut Command) {
 
 async fn ensure_public_remote_url(url: &Url) -> Result<()> {
     if url.scheme() != "https" {
-        return Err(anyhow!("connector client HTTP only permits public HTTPS URLs"));
+        return Err(anyhow!(
+            "connector client HTTP only permits public HTTPS URLs"
+        ));
     }
-    let host = url.host_str().ok_or_else(|| anyhow!("connector client HTTP URL is missing a host"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("connector client HTTP URL is missing a host"))?;
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
         return Err(anyhow!("connector client HTTP blocks local hosts"));
     }
     if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
         if is_private_ip(ip) {
-            return Err(anyhow!("connector client HTTP blocks private or local addresses"));
+            return Err(anyhow!(
+                "connector client HTTP blocks private or local addresses"
+            ));
         }
         return Ok(());
     }
@@ -765,14 +929,18 @@ async fn ensure_public_remote_url(url: &Url) -> Result<()> {
         .with_context(|| format!("failed to resolve connector HTTP host {host}"))?
         .collect();
     if resolved.is_empty() || resolved.iter().any(|address| is_private_ip(address.ip())) {
-        return Err(anyhow!("connector client HTTP host resolves to a private/local or empty address set"));
+        return Err(anyhow!(
+            "connector client HTTP host resolves to a private/local or empty address set"
+        ));
     }
     Ok(())
 }
 
 fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified(),
+        IpAddr::V4(ip) => {
+            ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+        }
         IpAddr::V6(ip) => {
             ip.is_loopback()
                 || ip.is_unspecified()

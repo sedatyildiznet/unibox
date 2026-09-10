@@ -55,12 +55,20 @@ async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, Str
 
 #[tauri::command]
 async fn bootstrap_runtime(state: State<'_, AppState>) -> Result<String, String> {
-    state.runtime.bootstrap().await.map_err(|error| error.to_string())
+    state
+        .runtime
+        .bootstrap()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn start_runtime(state: State<'_, AppState>) -> Result<String, String> {
-    state.runtime.start().await.map_err(|error| error.to_string())
+    state
+        .runtime
+        .start()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -70,7 +78,10 @@ fn stop_runtime(state: State<'_, AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn matrix_session(state: State<'_, AppState>) -> Result<MatrixSession, String> {
-    state.runtime.matrix_session().map_err(|error| error.to_string())
+    state
+        .runtime
+        .matrix_session()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -155,12 +166,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_root = normalize_windows_path(app.path().app_local_data_dir()?);
-            let resource_root = normalize_windows_path(
-                app.path()
-                    .resource_dir()?
-                    .join("resources")
-                    .join("native"),
-            );
+            let resource_root =
+                normalize_windows_path(app.path().resource_dir()?.join("resources").join("native"));
             let runtime = NativeRuntimeManager::new(data_root, resource_root)?;
             let registry = parse_registry(REGISTRY_RAW)?;
             app.manage(AppState { runtime, registry });

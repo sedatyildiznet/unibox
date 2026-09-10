@@ -61,10 +61,12 @@ jobs:
           - id: whatsapp
             repo: mautrix/whatsapp
             ref: v0.2608.0
+            package: ./cmd/mautrix-whatsapp
             output: mautrix-whatsapp.exe
           - id: telegram
             repo: mautrix/telegram
             ref: v0.2608.0
+            package: ./cmd/mautrix-telegram
             output: mautrix-telegram.exe
     steps:
       - uses: actions/checkout@v4
@@ -81,8 +83,10 @@ jobs:
         working-directory: vendor/bridge
         shell: pwsh
         env:
-          CGO_ENABLED: '0'
-        run: go build -trimpath -ldflags="-s -w" -o ../../native-runtime-artifact/${{ matrix.output }} .
+          CGO_ENABLED: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path ../../native-runtime-artifact | Out-Null
+          go build -trimpath -ldflags="-s -w" -o ../../native-runtime-artifact/${{ matrix.output }} ${{ matrix.package }}
 
       - uses: actions/upload-artifact@v4
         with:

@@ -251,25 +251,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-tuwunel
-          path: apps/desktop/src-tauri/resources/native-v033
+          path: apps/desktop/src-tauri/resources/native-v034
 
       - uses: actions/download-artifact@v4
         with:
           name: native-bridge-whatsapp
-          path: apps/desktop/src-tauri/resources/native-v033/connectors
+          path: apps/desktop/src-tauri/resources/native-v034/connectors
 
       - uses: actions/download-artifact@v4
         with:
           name: native-bridge-telegram
-          path: apps/desktop/src-tauri/resources/native-v033/connectors
+          path: apps/desktop/src-tauri/resources/native-v034/connectors
 
       - name: Verify packaged native resources
         shell: pwsh
         run: |
           $required = @(
-            'apps/desktop/src-tauri/resources/native-v033/tuwunel.exe',
-            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-telegram.exe'
+            'apps/desktop/src-tauri/resources/native-v034/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native-v034/connectors/mautrix-telegram.exe'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) { throw "Missing native resource: $path" }

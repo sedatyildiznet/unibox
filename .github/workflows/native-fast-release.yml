@@ -37,7 +37,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tuwunel-windows-native
-          path: apps/desktop/src-tauri/resources/native
+          path: apps/desktop/src-tauri/resources/native-v033
           repository: sedatyildiznet/unibox
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -46,7 +46,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-whatsapp-windows-native
-          path: apps/desktop/src-tauri/resources/native/connectors
+          path: apps/desktop/src-tauri/resources/native-v033/connectors
           repository: sedatyildiznet/unibox
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -55,7 +55,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-telegram-windows-native
-          path: apps/desktop/src-tauri/resources/native/connectors
+          path: apps/desktop/src-tauri/resources/native-v033/connectors
           repository: sedatyildiznet/unibox
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -64,9 +64,9 @@ jobs:
         shell: pwsh
         run: |
           $required = @(
-            'apps/desktop/src-tauri/resources/native/tuwunel.exe',
-            'apps/desktop/src-tauri/resources/native/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native/connectors/mautrix-telegram.exe'
+            'apps/desktop/src-tauri/resources/native-v033/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-telegram.exe'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) { throw "Missing native resource: $path" }
@@ -101,7 +101,7 @@ jobs:
 
           $stdout = Join-Path $root 'stdout.log'
           $stderr = Join-Path $root 'stderr.log'
-          $proc = Start-Process -FilePath (Resolve-Path 'apps/desktop/src-tauri/resources/native/tuwunel.exe') -ArgumentList @('-c', $config) -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          $proc = Start-Process -FilePath (Resolve-Path 'apps/desktop/src-tauri/resources/native-v033/tuwunel.exe') -ArgumentList @('-c', $config) -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           try {
             $ready = $false
             for ($i = 0; $i -lt 80; $i++) {

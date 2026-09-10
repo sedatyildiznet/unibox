@@ -35,7 +35,23 @@ type NavMode = 'all' | 'unread' | 'mentions' | 'archive' | 'favorites';
 type ListFilter = 'all' | 'direct' | 'groups' | 'unread' | 'favorites';
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const raw = error instanceof Error ? error.message : String(error);
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('bridge provisioning request failed') || lower.includes('connector client http request failed')) {
+    return 'The local connector could not complete sign-in. Retry the connection; technical details are kept in the local runtime logs.';
+  }
+  if (lower.includes('bridge provisioning returned')) {
+    return 'The service rejected the current sign-in step. Retry the connection or choose another available login method.';
+  }
+  if (lower.includes('invalid connector config') || lower.includes('configuration error')) {
+    return 'Unibox could not prepare this service configuration. Reinstall the current complete Unibox build and retry.';
+  }
+  if (lower.includes('api_hash') || lower.includes('telegram application credentials')) {
+    return 'This Unibox build is missing its Telegram application credentials. Install a complete release build; you should never need to enter API credentials yourself.';
+  }
+
+  return raw;
 }
 
 function isProvisioningConnector(connector: ConnectorDefinition): boolean {
@@ -57,6 +73,7 @@ const SERVICE_ICONS: Record<string, string> = {
   twitter: new URL('../assets/service-icons/twitter.svg', import.meta.url).href,
   bluesky: new URL('../assets/service-icons/bluesky.svg', import.meta.url).href,
   zulip: new URL('../assets/service-icons/zulip.svg', import.meta.url).href,
+  irc: new URL('../assets/service-icons/irc.svg', import.meta.url).href,
 };
 
 function ServiceIcon({ connector }: { connector: ConnectorDefinition }) {

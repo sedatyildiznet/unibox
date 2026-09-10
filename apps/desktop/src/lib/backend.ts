@@ -73,6 +73,10 @@ export type LoginStep = {
   user_input?: { fields: LoginField[] };
   display_and_wait?: { type: 'nothing' | 'emoji' | 'qr' | 'code'; data?: string; image_url?: string };
   cookies?: { url: string; fields: Array<{ id: string; required: boolean }> };
+  webauthn?: {
+    url?: string;
+    publicKey?: Record<string, unknown>;
+  };
   client_http?: {
     request_id: string;
     method: string;

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-missing-connectors-probe
+  cancel-in-progress: true
+
 jobs:
   discord:
     runs-on: windows-latest

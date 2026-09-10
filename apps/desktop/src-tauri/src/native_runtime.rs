@@ -45,6 +45,12 @@ struct ConnectorLocalSettings {
     api_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramAppCredentials {
+    api_id: i64,
+    api_hash: String,
+}
+
 #[derive(Default)]
 struct ChildProcesses {
     homeserver: Option<Child>,
@@ -69,7 +75,7 @@ impl NativeRuntimeManager {
         Ok(Self {
             data_root,
             resource_root,
-            http: Client::builder().timeout(Duration::from_secs(4)).build()?,
+            http: Client::builder().build()?,
             remote_http: Client::builder()
                 .timeout(Duration::from_secs(70))
                 .redirect(reqwest::redirect::Policy::none())
@@ -165,84 +171,27 @@ impl NativeRuntimeManager {
     }
 
     pub fn connector_available(&self, connector: &ConnectorDefinition) -> bool {
-        is_native_bridge(connector) && self.connector_executable(connector).is_file()
+        if !is_native_bridge(connector) || !self.connector_executable(connector).is_file() {
+            return false;
+        }
+        // Telegram API credentials are application-level credentials. End users
+        // must never be asked to create their own app keys. If this build does not
+        // contain Unibox's developer credentials, hide Telegram instead of exposing
+        // a broken setup flow.
+        connector.id != "telegram" || self.telegram_app_credentials().is_ok()
     }
 
-    pub fn connector_requirements(&self, connector: &ConnectorDefinition) -> serde_json::Value {
-        if connector.id != "telegram" {
-            return json!({"required": false, "fields": []});
-        }
-        let settings = self.load_connector_settings(connector).unwrap_or_default();
-        let configured = settings.api_id.unwrap_or_default() > 0
-            && settings.api_hash.as_deref().map(str::trim).map(str::len) == Some(32);
-        json!({
-            "required": !configured,
-            "fields": [
-                {
-                    "id": "api_id",
-                    "name": "Telegram API ID",
-                    "type": "text",
-                    "description": "Create an app at my.telegram.org/apps and enter its numeric API ID."
-                },
-                {
-                    "id": "api_hash",
-                    "name": "Telegram API Hash",
-                    "type": "password",
-                    "description": "Enter the 32-character API hash from my.telegram.org/apps."
-                }
-            ],
-            "help": "Telegram requires each third-party client to use an API ID and API hash from my.telegram.org/apps. These values are stored only in your local Unibox data."
-        })
+    pub fn connector_requirements(&self, _connector: &ConnectorDefinition) -> serde_json::Value {
+        json!({"required": false, "fields": []})
     }
 
     pub fn configure_connector(
         &self,
         connector: &ConnectorDefinition,
-        settings: serde_json::Value,
+        _settings: serde_json::Value,
     ) -> Result<String> {
         self.require_native_connector(connector)?;
-        if connector.id != "telegram" {
-            return Ok(format!(
-                "{} does not require pre-connection settings.",
-                connector.name
-            ));
-        }
-
-        let api_id = settings
-            .get("api_id")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .trim()
-            .parse::<i64>()
-            .context("Telegram API ID must be a positive number")?;
-        if api_id <= 0 {
-            return Err(anyhow!("Telegram API ID must be a positive number"));
-        }
-        let api_hash = settings
-            .get("api_hash")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        if api_hash.len() != 32 || !api_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Err(anyhow!(
-                "Telegram API hash must be exactly 32 hexadecimal characters"
-            ));
-        }
-
-        let state = self.connector_state(connector);
-        fs::create_dir_all(&state)?;
-        let local = ConnectorLocalSettings {
-            api_id: Some(api_id),
-            api_hash: Some(api_hash),
-        };
-        self.write_json_atomic(&self.connector_settings_path(connector), &local)?;
-
-        let config = self.connector_config(connector);
-        if config.is_file() {
-            self.patch_connector_config(connector, &config)?;
-        }
-        Ok("Telegram API credentials saved locally.".to_string())
+        Ok(format!("{} does not require end-user developer credentials.", connector.name))
     }
 
     pub fn connector_status(&self, connector: &ConnectorDefinition) -> ConnectorStatus {
@@ -395,13 +344,27 @@ impl NativeRuntimeManager {
             .http
             .request(method, url)
             .bearer_auth(session.access_token);
+
+        // display_and_wait is intentionally a long-poll. WhatsApp keeps this
+        // request open while the user scans and confirms the QR code. The old
+        // 4-second client timeout guaranteed a false failure even when pairing
+        // was working correctly.
+        let request_timeout = if path.contains("/display_and_wait") {
+            Duration::from_secs(31 * 60)
+        } else {
+            Duration::from_secs(90)
+        };
+        request = request.timeout(request_timeout);
+
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request
-            .send()
-            .await
-            .context("bridge provisioning request failed")?;
+        let response = request.send().await.map_err(|error| {
+            anyhow!(
+                "bridge provisioning request failed: {error}. {}",
+                self.log_tail(&format!("connector-{}.log", connector.id), 5000)
+            )
+        })?;
         let status = response.status();
         let text = response
             .text()
@@ -623,6 +586,7 @@ impl NativeRuntimeManager {
     async fn matrix_ready(&self) -> bool {
         self.http
             .get(format!("{MATRIX_URL}/_matrix/client/versions"))
+            .timeout(Duration::from_secs(2))
             .send()
             .await
             .map(|response| response.status().is_success())
@@ -712,17 +676,9 @@ impl NativeRuntimeManager {
         set_yaml(bridge, "permissions", YamlValue::Mapping(permissions));
 
         if connector.id == "telegram" {
-            let settings = self.load_connector_settings(connector)?;
-            let api_id = settings
-                .api_id
-                .filter(|value| *value > 0)
-                .ok_or_else(|| anyhow!("Telegram API ID is not configured"))?;
-            let api_hash = settings
-                .api_hash
-                .filter(|value| value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
-                .ok_or_else(|| anyhow!("Telegram API hash is not configured"))?;
-            set_yaml(root, "api_id", YamlValue::Number(api_id.into()));
-            set_yaml(root, "api_hash", YamlValue::String(api_hash));
+            let credentials = self.telegram_app_credentials()?;
+            set_yaml(root, "api_id", YamlValue::Number(credentials.api_id.into()));
+            set_yaml(root, "api_hash", YamlValue::String(credentials.api_hash));
         }
 
         if let Some(matrix) = mapping_child_optional(root, "matrix") {
@@ -904,6 +860,29 @@ impl NativeRuntimeManager {
         }
         serde_json::from_str(&fs::read_to_string(&path)?)
             .with_context(|| format!("invalid local settings for {}", connector.name))
+    }
+
+    fn telegram_app_credentials(&self) -> Result<TelegramAppCredentials> {
+        let path = self.resource_root.join("telegram-app.json");
+        let raw = fs::read_to_string(&path).with_context(|| {
+            format!(
+                "Telegram is not configured in this Unibox build: missing {}",
+                path.display()
+            )
+        })?;
+        let credentials: TelegramAppCredentials =
+            serde_json::from_str(&raw).context("invalid bundled Telegram app credentials")?;
+        let hash = credentials.api_hash.trim().to_ascii_lowercase();
+        if credentials.api_id <= 0
+            || hash.len() != 32
+            || !hash.chars().all(|ch| ch.is_ascii_hexdigit())
+        {
+            return Err(anyhow!("invalid bundled Telegram app credentials"));
+        }
+        Ok(TelegramAppCredentials {
+            api_id: credentials.api_id,
+            api_hash: hash,
+        })
     }
 
     fn connector_settings_path(&self, connector: &ConnectorDefinition) -> PathBuf {

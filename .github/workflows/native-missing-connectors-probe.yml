@@ -28,15 +28,41 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 https://github.com/mautrix/discord.git bridge
+          git clone --depth 1 --branch 3.2.16 https://gitlab.matrix.org/matrix-org/olm.git olm
           Set-Location bridge
           go mod download
-          # mautrix-discord currently pins zeroconfig v0.1.2, whose syslog
-          # config type is not Windows-compatible. Upstream zeroconfig fixed
-          # this by using an OS-neutral integer flag.
+
+          # mautrix-discord pins zeroconfig v0.1.2, which uses log/syslog and
+          # does not compile on Windows. Newer zeroconfig is Windows-safe.
           go get go.mau.fi/zeroconfig@latest
           go mod tidy
-          # goolm removes the external libolm header/library dependency.
-          go build -tags goolm -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
+
+          # This legacy Discord bridge uses the older mautrix/libolm backend.
+          # Build libolm with the same MinGW ABI used by Go cgo.
+          $olmRoot = (Resolve-Path ../olm).Path
+          $olmBuild = Join-Path $olmRoot 'build-mingw'
+          $mingwBin = 'C:\msys64\mingw64\bin'
+          if (-not (Test-Path (Join-Path $mingwBin 'gcc.exe'))) {
+            throw 'MSYS2 MinGW64 gcc is not available on the Windows runner.'
+          }
+          $env:PATH = "$mingwBin;$env:PATH"
+          cmake -S $olmRoot -B $olmBuild -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build $olmBuild --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $olmLib = Get-ChildItem $olmBuild -Recurse -File |
+            Where-Object { $_.Name -in @('libolm.a','olm.a') } |
+            Select-Object -First 1
+          if (-not $olmLib) { throw 'MinGW libolm static library was not produced.' }
+
+          $env:CGO_ENABLED = '1'
+          $env:CC = Join-Path $mingwBin 'gcc.exe'
+          $env:CXX = Join-Path $mingwBin 'g++.exe'
+          $env:CGO_CFLAGS = "-I$($olmRoot.Replace('\','/'))/include"
+          $env:CGO_LDFLAGS = "-L$($olmLib.DirectoryName.Replace('\','/'))"
+          go build -trimpath -ldflags='-s -w' -o ../mautrix-discord.exe .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Smoke test Discord config and registration
         shell: pwsh
         run: |
@@ -118,6 +144,8 @@ jobs:
           Push-Location $libsignal
           $env:RUSTC_WRAPPER = ''
           $env:RUSTFLAGS = '-Ctarget-feature=-crt-static'
+          rustup target add x86_64-pc-windows-gnu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build -p libsignal-ffi --release --target x86_64-pc-windows-gnu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location

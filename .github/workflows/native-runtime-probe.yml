@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-runtime-probe
-  cancel-in-progress: true
+  group: native-runtime-probe-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   tuwunel-windows:
@@ -86,7 +86,7 @@ jobs:
           CGO_ENABLED: '1'
         run: |
           New-Item -ItemType Directory -Force -Path ../../native-runtime-artifact | Out-Null
-          go build -trimpath -ldflags="-s -w" -o ../../native-runtime-artifact/${{ matrix.output }} ${{ matrix.package }}
+          go build -tags goolm -trimpath -ldflags="-s -w" -o ../../native-runtime-artifact/${{ matrix.output }} ${{ matrix.package }}
 
       - uses: actions/upload-artifact@v4
         with:

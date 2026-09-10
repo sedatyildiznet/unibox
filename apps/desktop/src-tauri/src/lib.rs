@@ -247,7 +247,7 @@ async fn connector_provision(
         .runtime
         .provision_request(&connector, &method, &path, body)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]

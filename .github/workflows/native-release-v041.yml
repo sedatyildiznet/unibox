@@ -190,8 +190,7 @@ jobs:
           $telegramExe = 'apps/desktop/src-tauri/resources/native-v041/connectors/mautrix-telegram.exe'
           $telegramApp = 'apps/desktop/src-tauri/resources/native-v041/telegram-app.json'
           if ([string]::IsNullOrWhiteSpace($env:TG_ID) -or [string]::IsNullOrWhiteSpace($env:TG_HASH)) {
-            Write-Warning 'Telegram developer credentials are not configured. Omitting Telegram from the user-facing build.'
-            Remove-Item $telegramExe -Force -ErrorAction SilentlyContinue
+            throw 'Unibox Telegram app credentials are not configured. Refusing to ship a build that asks end users for API credentials or hides Telegram.'
           } else {
             $parsedId = 0L
             if (-not [long]::TryParse($env:TG_ID, [ref]$parsedId) -or $parsedId -le 0) {

@@ -1,4 +1,4 @@
-name: Native Windows Hotfix Release
+name: Native Windows Installer Fix Release
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: unibox-native-hotfix-release
+  group: unibox-native-installerfix-release
   cancel-in-progress: true
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Use freshly patched WhatsApp connector
+      - name: Use patched WhatsApp connector
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-whatsapp
@@ -53,7 +53,7 @@ jobs:
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Use freshly patched Telegram connector
+      - name: Use patched Telegram connector
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-telegram
@@ -62,17 +62,28 @@ jobs:
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify native resources
+      - name: Verify native resources and installer hook
         shell: pwsh
         run: |
           $required = @(
             'apps/desktop/src-tauri/resources/native/tuwunel.exe',
             'apps/desktop/src-tauri/resources/native/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native/connectors/mautrix-telegram.exe'
+            'apps/desktop/src-tauri/resources/native/connectors/mautrix-telegram.exe',
+            'apps/desktop/src-tauri/windows/hooks.nsh'
           )
           foreach ($path in $required) {
-            if (-not (Test-Path $path)) { throw "Missing native resource: $path" }
+            if (-not (Test-Path $path)) { throw "Missing required resource: $path" }
+          }
+          foreach ($path in $required[0..2]) {
             if ((Get-Item $path).Length -lt 1MB) { throw "Native resource is unexpectedly small: $path" }
+          }
+          $tauri = Get-Content 'apps/desktop/src-tauri/tauri.conf.json' -Raw
+          if ($tauri -notmatch '"installerHooks"\s*:\s*"\.\/windows\/hooks\.nsh"') {
+            throw 'NSIS installerHooks is not wired to windows/hooks.nsh'
+          }
+          $hook = Get-Content 'apps/desktop/src-tauri/windows/hooks.nsh' -Raw
+          foreach ($name in @('unibox-desktop.exe','tuwunel.exe','mautrix-whatsapp.exe','mautrix-telegram.exe')) {
+            if ($hook -notmatch [regex]::Escape($name)) { throw "Installer hook does not stop $name" }
           }
 
       - name: Validate latest native-runtime source
@@ -100,32 +111,32 @@ jobs:
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)"
           } | Set-Content dist-native/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist-native/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: unibox-native-hotfix-windows
+          name: unibox-native-installerfix-windows
           path: dist-native/*
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish hotfix release
+      - name: Publish installer-fix release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = 'v0.3.1-native-hotfix'
+          $tag = 'v0.3.2-native-installerfix'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
           }
           $notes = @"
-          Updated WSL-free native Windows build.
+          WSL-free native Windows build with in-place upgrade fix.
 
-          Includes:
-          - polished conversation filter controls
-          - bundled WhatsApp and Telegram service icons
-          - unsupported native connector cards hidden from the UI
-          - Windows connector config-lock mitigation in Unibox runtime
-          - freshly rebuilt WhatsApp and Telegram connectors with Windows config-writer patch
+          Fixes:
+          - installer stops Unibox, Tuwunel, WhatsApp and Telegram native processes before replacing bundled executables
+          - retries locked runtime binary cleanup before file copy
+          - preserves AppData message/session/database data
+          - includes the latest native UI and connector fixes from native-runtime
           "@
-          gh release create $tag dist-native/* --target f0f0afd1bf55972793f82645af9bbcbeb3c0d04c --title 'Unibox v0.3.1 Native Windows Hotfix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          gh release create $tag dist-native/* --target 59cf52fd32a852570dda673e40e1bd6c23c630e4 --title 'Unibox v0.3.2 Native Windows Installer Fix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

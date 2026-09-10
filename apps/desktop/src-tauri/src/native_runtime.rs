@@ -181,16 +181,51 @@ impl NativeRuntimeManager {
         connector.id != "telegram" || self.telegram_app_credentials().is_ok()
     }
 
-    pub fn connector_requirements(&self, _connector: &ConnectorDefinition) -> serde_json::Value {
+    pub fn connector_requirements(&self, connector: &ConnectorDefinition) -> serde_json::Value {
+        if connector.id == "googlechat" {
+            return json!({
+                "required": true,
+                "help": "Google Chat's current mautrix bridge authenticates with browser session cookies. Open chat.google.com in your browser and copy these five cookie values. They are sent only to the local bridge and the login message is redacted by the bridge after use.",
+                "fields": [
+                    {"id":"compass","name":"COMPASS","type":"password","description":"chat.google.com COMPASS cookie"},
+                    {"id":"ssid","name":"SSID","type":"password","description":"chat.google.com SSID cookie"},
+                    {"id":"sid","name":"SID","type":"password","description":"chat.google.com SID cookie"},
+                    {"id":"osid","name":"OSID","type":"password","description":"chat.google.com OSID cookie"},
+                    {"id":"hsid","name":"HSID","type":"password","description":"chat.google.com HSID cookie"}
+                ]
+            });
+        }
         json!({"required": false, "fields": []})
     }
 
     pub fn configure_connector(
         &self,
         connector: &ConnectorDefinition,
-        _settings: serde_json::Value,
+        settings: serde_json::Value,
     ) -> Result<String> {
         self.require_native_connector(connector)?;
+        if connector.id == "googlechat" {
+            let mut cookies = serde_json::Map::new();
+            for (input, output) in [
+                ("compass", "COMPASS"),
+                ("ssid", "SSID"),
+                ("sid", "SID"),
+                ("osid", "OSID"),
+                ("hsid", "HSID"),
+            ] {
+                let value = settings
+                    .get(input)
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| anyhow!("Google Chat {output} cookie is required"))?;
+                cookies.insert(output.to_string(), serde_json::Value::String(value.to_string()));
+            }
+            return Ok(format!(
+                "login-cookie {}",
+                serde_json::Value::Object(cookies)
+            ));
+        }
         Ok(format!(
             "{} does not require end-user developer credentials.",
             connector.name

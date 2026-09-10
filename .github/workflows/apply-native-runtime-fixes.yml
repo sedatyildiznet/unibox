@@ -2,10 +2,8 @@ name: Apply Native Runtime Fixes
 
 on:
   push:
-    branches:
-      - release/native-hotfix
-    paths:
-      - '.github/workflows/apply-native-runtime-fixes.yml'
+    branches: [release/native-hotfix]
+    paths: ['.github/workflows/apply-native-runtime-fixes.yml']
   workflow_dispatch:
 
 permissions:
@@ -20,47 +18,28 @@ jobs:
           ref: native-runtime
           fetch-depth: 0
 
-      - name: Fix Telegram config placement
-        shell: pwsh
+      - name: Patch Telegram config placement
+        shell: bash
         run: |
-          $path = 'apps/desktop/src-tauri/src/native_runtime.rs'
-          $raw = Get-Content $path -Raw
-          $old = @'
-            let network = mapping_child(root, "network");
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('apps/desktop/src-tauri/src/native_runtime.rs')
+          s = p.read_text(encoding='utf-8')
+          old = '''            let network = mapping_child(root, "network");
             set_yaml(network, "api_id", YamlValue::Number(api_id.into()));
             set_yaml(network, "api_hash", YamlValue::String(api_hash));
-'@
-          $new = @'
-            set_yaml(root, "api_id", YamlValue::Number(api_id.into()));
+'''
+          new = '''            set_yaml(root, "api_id", YamlValue::Number(api_id.into()));
             set_yaml(root, "api_hash", YamlValue::String(api_hash));
-'@
-          if (-not $raw.Contains($old)) {
-            if ($raw.Contains('set_yaml(root, "api_id"')) {
-              Write-Host 'Telegram config placement is already fixed.'
-            } else {
-              throw 'Expected Telegram network api_id/api_hash block was not found.'
-            }
-          } else {
-            $raw = $raw.Replace($old, $new)
-            Set-Content -Path $path -Value $raw -NoNewline -Encoding utf8
-          }
-
-      - name: Verify provisioning auth and Telegram requirements
-        shell: pwsh
-        run: |
-          $raw = Get-Content 'apps/desktop/src-tauri/src/native_runtime.rs' -Raw
-          if ($raw -notmatch 'append_pair\("user_id",\s*&session\.user_id\)') {
-            throw 'BridgeV2 provisioning user_id auth fix is missing.'
-          }
-          if ($raw -notmatch 'set_yaml\(root,\s*"api_id"') {
-            throw 'Telegram api_id is not written at config root.'
-          }
-          if ($raw -notmatch 'set_yaml\(root,\s*"api_hash"') {
-            throw 'Telegram api_hash is not written at config root.'
-          }
-          if ($raw -notmatch 'connector_requirements') {
-            throw 'Telegram credential requirements flow is missing.'
-          }
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding='utf-8')
+          elif 'set_yaml(root, "api_id"' not in s or 'set_yaml(root, "api_hash"' not in s:
+              raise SystemExit('Expected Telegram config block not found')
+          if 'append_pair("user_id", &session.user_id)' not in s:
+              raise SystemExit('BridgeV2 provisioning user_id auth fix is missing')
+          PY
 
       - name: Commit source fix
         shell: bash

@@ -1,0 +1,233 @@
+name: Native Windows v0.5.0 All Services
+
+on:
+  workflow_run:
+    workflows:
+      - Native Missing Connectors Probe
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      missing_run_id:
+        description: Successful Native Missing Connectors Probe run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: unibox-v050-all-services
+  cancel-in-progress: true
+
+jobs:
+  package:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      MISSING_RUN_ID: ${{ github.event.workflow_run.id || inputs.missing_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download verified native Tuwunel
+        uses: actions/download-artifact@v4
+        with:
+          name: tuwunel-windows-native
+          path: apps/desktop/src-tauri/resources/native-v050
+          repository: sedatyildiznet/unibox
+          run-id: 34465477705
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download verified WhatsApp bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-whatsapp-windows-native
+          path: apps/desktop/src-tauri/resources/native-v050/connectors
+          repository: sedatyildiznet/unibox
+          run-id: 34465477705
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download verified Telegram bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-telegram-windows-native
+          path: apps/desktop/src-tauri/resources/native-v050/connectors
+          repository: sedatyildiznet/unibox
+          run-id: 34465477705
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download previously Windows-verified Mautrix bridges
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-ext-*
+          path: apps/desktop/src-tauri/resources/native-v050/connectors
+          merge-multiple: true
+          repository: sedatyildiznet/unibox
+          run-id: 34526746751
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Signal, Discord and Google Chat Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: missing-*
+          path: apps/desktop/src-tauri/resources/native-v050/connectors
+          merge-multiple: true
+          repository: sedatyildiznet/unibox
+          run-id: ${{ env.MISSING_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure app-level Telegram credentials
+        shell: pwsh
+        env:
+          TG_ID: ${{ secrets.UNIBOX_TELEGRAM_API_ID }}
+          TG_HASH: ${{ secrets.UNIBOX_TELEGRAM_API_HASH }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TG_ID) -or [string]::IsNullOrWhiteSpace($env:TG_HASH)) {
+            throw 'Telegram requires Unibox application-level API credentials. Set UNIBOX_TELEGRAM_API_ID and UNIBOX_TELEGRAM_API_HASH repository secrets. End users will never be asked for them.'
+          }
+          $parsedId = 0L
+          if (-not [long]::TryParse($env:TG_ID, [ref]$parsedId) -or $parsedId -le 0) {
+            throw 'UNIBOX_TELEGRAM_API_ID must be a positive integer.'
+          }
+          $hash = $env:TG_HASH.Trim().ToLowerInvariant()
+          if ($hash -notmatch '^[0-9a-f]{32}$') {
+            throw 'UNIBOX_TELEGRAM_API_HASH must be exactly 32 hexadecimal characters.'
+          }
+          @{ api_id = $parsedId; api_hash = $hash } |
+            ConvertTo-Json -Compress |
+            Set-Content 'apps/desktop/src-tauri/resources/native-v050/telegram-app.json' -Encoding utf8
+
+      - name: Verify every advertised connector is bundled
+        shell: pwsh
+        run: |
+          $root = 'apps/desktop/src-tauri/resources/native-v050'
+          $required = @(
+            "$root/tuwunel.exe",
+            "$root/connectors/mautrix-whatsapp.exe",
+            "$root/connectors/mautrix-telegram.exe",
+            "$root/connectors/mautrix-signal.exe",
+            "$root/connectors/signal_ffi.dll",
+            "$root/connectors/mautrix-discord.exe",
+            "$root/connectors/mautrix-instagram.exe",
+            "$root/connectors/mautrix-meta.exe",
+            "$root/connectors/mautrix-gmessages.exe",
+            "$root/connectors/mautrix-googlechat.exe",
+            "$root/connectors/mautrix-slack.exe",
+            "$root/connectors/mautrix-twitter.exe",
+            "$root/connectors/mautrix-bluesky.exe",
+            "$root/connectors/mautrix-linkedin.exe",
+            "$root/connectors/mautrix-gvoice.exe",
+            "$root/connectors/mautrix-zulip.exe",
+            "$root/connectors/mautrix-irc.exe",
+            "$root/telegram-app.json"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Missing all-services runtime file: $path" }
+          }
+          Write-Host 'All 15 connector packages are present.'
+
+      - name: Smoke test packaged connector executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $connectorRoot = (Resolve-Path 'apps/desktop/src-tauri/resources/native-v050/connectors').Path
+          $executables = Get-ChildItem "$connectorRoot/mautrix-*.exe" | Sort-Object Name
+          if ($executables.Count -ne 15) {
+            throw "Expected 15 connector executables, found $($executables.Count)."
+          }
+          foreach ($exe in $executables) {
+            $name = $exe.BaseName
+            $smoke = Join-Path $env:RUNNER_TEMP "unibox-v050-$name"
+            Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+            $cfg = Join-Path $smoke 'config.yaml'
+            $reg = Join-Path $smoke 'registration.yaml'
+            Write-Host "Smoke testing $($exe.Name)"
+            & $exe.FullName -e -c $cfg
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) {
+              throw "$($exe.Name) failed example config generation."
+            }
+            & $exe.FullName -g -c $cfg -r $reg
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) {
+              throw "$($exe.Name) failed appservice registration generation."
+            }
+          }
+
+      - name: Validate Unibox source
+        shell: pwsh
+        run: |
+          pnpm check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build all-services NSIS installer
+        run: pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
+
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $installer = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer was not generated.' }
+          Copy-Item $installer.FullName 'dist/Unibox-Native-Setup.exe' -Force
+          if (Test-Path 'target/release/unibox-desktop.exe') {
+            Copy-Item 'target/release/unibox-desktop.exe' 'dist/Unibox-Native-Portable.exe' -Force
+          }
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unibox-v050-all-services-windows
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish v0.5.0 all-services release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag='v0.5.0-all-services'
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
+          }
+          $notes=@"
+          WSL-free native Windows all-services build.
+
+          Included:
+          WhatsApp, Telegram, Signal, Discord, Instagram, Facebook Messenger,
+          Google Messages, Google Chat, Slack, X/Twitter, Bluesky, LinkedIn,
+          Google Voice, Zulip and IRC.
+
+          Authentication:
+          - WhatsApp: QR pairing
+          - Telegram: phone number, verification code and optional 2FA; no API ID/hash prompt is shown to users
+          - Discord: QR pairing through its local Mautrix management room, with QR images rendered directly in Unibox
+          - Google Chat: local browser-cookie login form required by the current upstream Mautrix Google Chat bridge
+          - Other BridgeV2 services: native Mautrix login flows
+
+          No WSL, Docker, Hyper-V, separate PostgreSQL or separate Python installation is required.
+          "@
+          gh release create $tag dist/* --target native-runtime --title 'Unibox v0.5.0 All Services' --prerelease --notes $notes --repo $env:GITHUB_REPOSITORY

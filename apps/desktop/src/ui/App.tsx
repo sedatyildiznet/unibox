@@ -23,6 +23,7 @@ import {
   backend,
   type ConnectorDefinition,
   type ConnectorStatus,
+  type ConnectorRequirements,
   type LoginField,
   type LoginFlow,
   type LoginStep,
@@ -61,6 +62,8 @@ export function App() {
   const [activeConnector, setActiveConnector] = useState<ConnectorDefinition | null>(null);
   const [connectorBusy, setConnectorBusy] = useState(false);
   const [connectorError, setConnectorError] = useState('');
+  const [connectorRequirements, setConnectorRequirements] = useState<ConnectorRequirements | null>(null);
+  const [connectorSetupValues, setConnectorSetupValues] = useState<Record<string, string>>({});
   const [flows, setFlows] = useState<LoginFlow[]>([]);
   const [loginStep, setLoginStep] = useState<LoginStep | null>(null);
   const [loginValues, setLoginValues] = useState<Record<string, string>>({});
@@ -263,30 +266,57 @@ export function App() {
     setShowServices(false);
     setConnectorBusy(true);
     setConnectorError('');
+    setConnectorRequirements(null);
+    setConnectorSetupValues({});
     setFlows([]);
     setLoginStep(null);
     setLoginValues({});
 
     try {
-      let status = await backend.connectorStatus(connector.id);
-      if (!status.installed) {
-        await backend.installConnector(connector.id);
-        status = await backend.connectorStatus(connector.id);
+      const requirements = await backend.connectorRequirements(connector.id);
+      if (requirements.required) {
+        setConnectorRequirements(requirements);
+        return;
       }
-      if (!status.running) await backend.startConnector(connector.id);
+      await continueConnectService(connector);
+    } catch (error) {
+      setConnectorError(errorText(error));
+    } finally {
+      setConnectorBusy(false);
+    }
+  }
 
-      if (isProvisioningConnector(connector)) {
-        const response = await backend.provision<{ flows: LoginFlow[] }>(
-          connector.id,
-          'GET',
-          '/v3/login/flows',
-        );
-        const nextFlows = response.flows ?? [];
-        setFlows(nextFlows);
-        if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
-      } else {
-        await beginLegacyLogin(connector);
-      }
+  async function continueConnectService(connector: ConnectorDefinition): Promise<void> {
+    let status = await backend.connectorStatus(connector.id);
+    if (!status.installed) {
+      await backend.installConnector(connector.id);
+      status = await backend.connectorStatus(connector.id);
+    }
+    if (!status.running) await backend.startConnector(connector.id);
+
+    if (isProvisioningConnector(connector)) {
+      const response = await backend.provision<{ flows: LoginFlow[] }>(
+        connector.id,
+        'GET',
+        '/v3/login/flows',
+      );
+      const nextFlows = response.flows ?? [];
+      setFlows(nextFlows);
+      if (nextFlows.length === 1) await beginFlow(connector, nextFlows[0]);
+    } else {
+      await beginLegacyLogin(connector);
+    }
+  }
+
+  async function submitConnectorRequirements(): Promise<void> {
+    if (!activeConnector || !connectorRequirements) return;
+    setConnectorBusy(true);
+    setConnectorError('');
+    try {
+      await backend.configureConnector(activeConnector.id, connectorSetupValues);
+      setConnectorRequirements(null);
+      setConnectorSetupValues({});
+      await continueConnectService(activeConnector);
     } catch (error) {
       setConnectorError(errorText(error));
     } finally {
@@ -608,12 +638,40 @@ export function App() {
           <div className="modal loginModal">
             <div className="modalHeader">
               <div><h2>Connect {activeConnector.name}</h2><p>{activeConnector.description}</p></div>
-              <button onClick={() => setActiveConnector(null)}><X size={20} /></button>
+              <button onClick={() => { setActiveConnector(null); setConnectorRequirements(null); setConnectorSetupValues({}); }}><X size={20} /></button>
             </div>
             {activeConnector.risk_notice && <WarningBox text={activeConnector.risk_notice} />}
             {connectorError && <ErrorBox text={connectorError} />}
-            {connectorBusy && <div className="loadingRow"><LoaderCircle className="spin" size={20} />Preparing connector…</div>}
-            {!connectorBusy && !loginStep && flows.length > 1 && (
+            {connectorRequirements && (
+              <div className="loginForm connectorRequirements">
+                {connectorRequirements.help && <p>{connectorRequirements.help}</p>}
+                {connectorRequirements.fields.map(field => (
+                  <label key={field.id}>
+                    <span>{field.name}</span>
+                    {field.description && <small>{field.description}</small>}
+                    <input
+                      type={field.type}
+                      autoComplete="off"
+                      value={connectorSetupValues[field.id] ?? ''}
+                      onChange={event => setConnectorSetupValues({
+                        ...connectorSetupValues,
+                        [field.id]: event.target.value,
+                      })}
+                    />
+                  </label>
+                ))}
+                <button
+                  className="primaryButton"
+                  disabled={connectorBusy || connectorRequirements.fields.some(field => !(connectorSetupValues[field.id] ?? '').trim())}
+                  onClick={() => void submitConnectorRequirements()}
+                >
+                  {connectorBusy ? <LoaderCircle className="spin" size={18} /> : null}
+                  Save locally and continue
+                </button>
+              </div>
+            )}
+            {connectorBusy && !connectorRequirements && <div className="loadingRow"><LoaderCircle className="spin" size={20} />Preparing connector…</div>}
+            {!connectorBusy && !connectorRequirements && !loginStep && flows.length > 1 && (
               <div className="flowList">
                 {flows.map(flow => (
                   <button key={flow.id} onClick={() => void beginFlow(activeConnector, flow)}>
@@ -622,7 +680,7 @@ export function App() {
                 ))}
               </div>
             )}
-            {!connectorBusy && !loginStep && flows.length === 0 && !connectorError && (
+            {!connectorBusy && !connectorRequirements && !loginStep && flows.length === 0 && !connectorError && (
               <div className="loadingRow"><LoaderCircle className="spin" size={20} />Starting connector…</div>
             )}
             {loginStep && (

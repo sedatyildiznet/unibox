@@ -191,7 +191,10 @@ impl NativeRuntimeManager {
         _settings: serde_json::Value,
     ) -> Result<String> {
         self.require_native_connector(connector)?;
-        Ok(format!("{} does not require end-user developer credentials.", connector.name))
+        Ok(format!(
+            "{} does not require end-user developer credentials.",
+            connector.name
+        ))
     }
 
     pub fn connector_status(&self, connector: &ConnectorDefinition) -> ConnectorStatus {

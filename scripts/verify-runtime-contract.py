@@ -8,14 +8,39 @@ BOOTSTRAP = (ROOT / 'apps/desktop/src-tauri/resources/runtime/bootstrap.ps1').re
 PROVISION = (ROOT / 'apps/desktop/src-tauri/resources/runtime/provision-runtime.sh').read_text(encoding='utf-8')
 CONNECTOR = (ROOT / 'apps/desktop/src-tauri/resources/runtime/unibox-connector.sh').read_text(encoding='utf-8')
 TAURI = (ROOT / 'apps/desktop/src-tauri/tauri.conf.json').read_text(encoding='utf-8')
+MAIN = (ROOT / 'apps/desktop/src-tauri/src/main.rs').read_text(encoding='utf-8')
+
+imports_wsl2 = (
+    '--import' in BOOTSTRAP
+    and '$Distro' in BOOTSTRAP
+    and '$DistroDir' in BOOTSTRAP
+    and '$RootfsPath' in BOOTSTRAP
+    and '--version' in BOOTSTRAP
+    and "'2'" in BOOTSTRAP
+)
+
+repairs_wsl2 = (
+    'Enable-WindowsOptionalFeature' in BOOTSTRAP
+    and 'Microsoft-Windows-Subsystem-Linux' in BOOTSTRAP
+    and 'VirtualMachinePlatform' in BOOTSTRAP
+    and 'hypervisorlaunchtype' in BOOTSTRAP
+    and 'vmcompute' in BOOTSTRAP
+)
+
+handles_hcs_failure = (
+    'HCS_E_SERVICE_NOT_AVAILABLE' in BOOTSTRAP
+    and 'Repair-WslPlatform' in BOOTSTRAP
+)
 
 checks = {
     'core uses managed Synapse service name': 'pub const SYNAPSE_SERVICE: &str = "unibox-synapse";' in CORE,
     'core does not start distro package service': 'systemctl start postgresql matrix-synapse' not in CORE,
-    'bootstrap imports WSL2 runtime': '--version 2' in BOOTSTRAP,
+    'Windows release binary uses GUI subsystem': 'windows_subsystem = "windows"' in MAIN,
+    'bootstrap imports WSL2 runtime': imports_wsl2,
     'bootstrap verifies SHA-256': 'Get-FileHash -Algorithm SHA256' in BOOTSTRAP,
     'bootstrap starts managed Synapse service': 'postgresql unibox-synapse' in BOOTSTRAP,
-    'bootstrap can request WSL installation': "--install', '--no-distribution'" in BOOTSTRAP,
+    'bootstrap can repair required WSL2 Windows features': repairs_wsl2,
+    'bootstrap handles HCS service-not-available failures': handles_hcs_failure,
     'provision pins Synapse version': 'SYNAPSE_VERSION=1.160.0' in PROVISION,
     'Synapse client listener is loopback only': "bind_addresses: ['127.0.0.1']" in PROVISION,
     'public registration stays disabled': 'enable_registration: false' in PROVISION,

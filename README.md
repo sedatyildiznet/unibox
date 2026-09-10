@@ -3,253 +3,207 @@
 **All your chats. One box.**
 
 [![CI](https://github.com/sedatyildiznet/unibox/actions/workflows/ci.yml/badge.svg)](https://github.com/sedatyildiznet/unibox/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sedatyildiznet/unibox?include_prereleases&label=release)](https://github.com/sedatyildiznet/unibox/releases)
-[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4)](https://github.com/sedatyildiznet/unibox/actions)
+[![Native all-services](https://github.com/sedatyildiznet/unibox/actions/workflows/native-v050-all-services-release.yml/badge.svg?branch=native-runtime)](https://github.com/sedatyildiznet/unibox/actions/workflows/native-v050-all-services-release.yml)
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4)](https://github.com/sedatyildiznet/unibox/releases)
 
-Unibox is a **local-first, open-source universal desktop messenger** designed to bring multiple messaging accounts into one unified inbox without requiring an Unibox cloud account or storing your conversations on an Unibox-operated server.
+Unibox is a local-first Windows desktop messenger built with Tauri, React and a Rust native runtime supervisor. Its Windows runtime is bundled with the application: users do not install or manage Matrix, Mautrix, Python, WSL, Docker or a database server themselves.
 
-> **Current version:** `0.2.0`
+> **Current native release line:** `0.5.0`
 >
-> **Project status:** active development. The Windows desktop application, local control daemon, managed WSL2 runtime, installer pipeline and connector architecture are implemented, but connector provisioning and production release signing are still being completed.
+> **Final all-services tag:** `v0.5.0-native-all`
+>
+> A release with that tag is created only when the all-services Windows gate succeeds. Until then, do not treat a development artifact as a supported release.
 
-## Download & Windows Setup
+## Download and Windows setup
 
-### Stable / public installer
-
-Production installers will be published on the GitHub Releases page:
-
-**[Download Unibox for Windows](https://github.com/sedatyildiznet/unibox/releases)**
-
-The intended Windows installation flow is:
+The final Windows package is a single NSIS installer:
 
 ```text
-Download Unibox Setup.exe
+Unibox-Native-Setup.exe
+```
+
+Release page:
+
+**[Unibox releases](https://github.com/sedatyildiznet/unibox/releases)**
+
+Normal installation is intentionally simple:
+
+```text
+Download Unibox-Native-Setup.exe
         ↓
 Run the installer
         ↓
 Launch Unibox
         ↓
-Unibox prepares the local WSL2 runtime automatically
+The bundled native runtime starts locally
+        ↓
+Add a service and sign in
 ```
 
-> There is currently **no published GitHub Release**. Do not treat CI smoke builds as production releases.
+No WSL installation, Docker Desktop, Ubuntu distribution, Hyper-V provisioning, PowerShell command, terminal command, Python installation or reboot is part of the normal Unibox setup flow.
 
-### CI test builds
+Development builds are currently unsigned. Windows SmartScreen may therefore warn before running a development installer. A SmartScreen warning is not part of the runtime bootstrap and does not mean WSL or another dependency is required.
 
-Every successful Windows CI run currently produces two temporary artifacts:
-
-| Artifact | Contents | Purpose |
-| --- | --- | --- |
-| `unibox-windows-installer-smoke` | NSIS `Setup.exe` installer | Installer testing |
-| `unibox-windows-smoke` | `unibox-desktop.exe` | Portable/raw executable testing |
-
-Open the latest successful workflow run and download the artifact from the **Artifacts** section:
-
-**[Windows CI builds](https://github.com/sedatyildiznet/unibox/actions/workflows/ci.yml)**
-
-CI artifacts are temporary and currently use a short retention period. They are unsigned smoke/test builds and Windows may display a SmartScreen warning.
-
-### Installer files in this repository
-
-The Windows installation/bootstrap code lives under:
+## Native Windows architecture
 
 ```text
-installer/
-└── windows-install.ps1
+Unibox Desktop
+Tauri + React
+      |
+      v
+Rust NativeRuntimeManager
+      |
+      +-- tuwunel.exe
+      |     local Matrix homeserver
+      |
+      +-- mautrix-*.exe
+            native Windows connectors
 ```
 
-Runtime bootstrap resources are bundled from:
+Tuwunel and connector processes bind to localhost. Federation and public Matrix registration are disabled in the desktop runtime.
+
+The application runtime data is stored under:
 
 ```text
-apps/desktop/src-tauri/resources/runtime/
+%LOCALAPPDATA%\app.unibox.desktop\runtime-native\
 ```
 
-The NSIS installer itself is generated during the build and is not committed as a binary to the repository.
+That directory contains the local Matrix database, generated appservice registrations, connector configuration/session databases, local secrets and runtime logs. Installer resources and user data are deliberately separate.
 
-Build output:
+## Services
 
-```text
-target/release/bundle/nsis/*.exe
-```
+`registry/stable.json` is the connector catalog and remains the source of truth, but the UI does not blindly expose everything in the catalog.
 
-Raw desktop executable:
+A service appears in **Add Service** only when the current installer actually contains a supported native adapter and its required runtime files. Telegram additionally requires Unibox application-level credentials to be embedded at build time; Signal requires its native FFI DLL.
 
-```text
-target/release/unibox-desktop.exe
-```
-
-## Windows Requirements
-
-For normal end users, the target is:
-
-- Windows 10 or Windows 11 x64
-- WSL2 support enabled/available
-- Internet access during first-time runtime provisioning
-- Enough disk space for the desktop app, WSL2 runtime, Synapse, PostgreSQL and connector data
-
-The production goal is that users **do not need to manually install Docker, edit YAML files, manage bridge bots or understand Matrix**.
-
-## Why Unibox
-
-- **Local-first:** Synapse, connector sessions, databases, media cache, settings and indexes are intended to live on the user's device.
-- **No Unibox cloud account:** the default architecture has no central Unibox identity or message-storage service.
-- **Multi-account:** multiple accounts per network where supported by the upstream connector.
-- **Unified inbox:** All Chats, Unread, Mentions, Archive, account filters and global search in one desktop UI.
-- **Connector-driven:** messaging networks are integrated through a managed connector layer.
-- **Automatic updates:** desktop releases use Tauri updater artifacts from GitHub Releases; managed runtime and connectors have separate verified update tracks.
-- **Private runtime:** local APIs are designed to bind to loopback/private IPC. Federation and public registration are disabled in the default desktop runtime.
-
-## Target Connectors
-
-Unibox is designed to support integrations where technically and legally possible, including:
+The `v0.5.0-native-all` release gate requires all of these target services to pass before the tag may be published:
 
 - WhatsApp
 - Telegram
 - Signal
 - Discord
 - Instagram
-- Messenger
+- Facebook Messenger
 - Google Messages
 - Google Chat
 - Slack
-- X / Twitter DM
+- X / Twitter
 - Bluesky
 - LinkedIn
 - Google Voice
 - Zulip
 - IRC
-- iMessage on supported Apple-platform configurations
 
-Connector availability varies. Some integrations depend on unofficial or reverse-engineered upstream projects and may break when the source platform changes its protocol or policies.
+If even one required target fails its Windows build/runtime gate, the all-services release is not created. This list is therefore a release target, not a claim that an un-gated development build supports every item.
 
-## Architecture
+## Authentication behavior
+
+### WhatsApp
+
+WhatsApp uses the Mautrix BridgeV2 provisioning flow. Unibox renders the QR code in-app and keeps the `display_and_wait` request open while the phone confirms pairing.
+
+### Telegram
+
+End users are never asked for Telegram API ID/API hash or sent to `my.telegram.org`.
+
+The user flow is:
 
 ```text
-Unibox Desktop (Tauri 2 + React + TypeScript)
-        |
-        | localhost / private IPC
-        v
-uniboxd (Rust)
-        |
-        +-- Runtime Manager
-        +-- Connector Manager
-        +-- Account Manager
-        +-- Health Monitor
-        +-- Update / Rollback
-        +-- Backup / Restore
-        |
-        v
-Managed Local Runtime
-  +-- WSL2 (Windows)
-  +-- Synapse
-  +-- PostgreSQL
-  +-- mautrix / compatible connectors
+phone number
+    ↓
+verification code
+    ↓
+2FA password if required
+    ↓
+connected
 ```
 
-On Windows, the managed runtime is intended to operate behind the normal desktop installer and application UI.
+The application-level Telegram API credentials are injected only by GitHub Actions using the `UNIBOX_TELEGRAM_API_ID` and `UNIBOX_TELEGRAM_API_HASH` repository secrets. The all-services release fails if those secrets are missing or invalid.
 
-## Build From Source
+### Legacy connectors
+
+Discord and Google Chat currently use their upstream legacy Mautrix adapters. They are still packaged as local Windows executables; Google Chat's Python dependencies are frozen into its PyInstaller executable so users do not install Python.
+
+## Upgrade behavior
+
+Native binaries are immutable installer resources. The `0.5.0` line uses:
+
+```text
+apps/desktop/src-tauri/resources/native-v050/
+```
+
+A later release uses a new resource slot rather than overwriting running connector files in place.
+
+Before install/update, the NSIS hook stops the desktop app, Tuwunel and bundled connector processes. User state under `%LOCALAPPDATA%` is not deleted. This avoids locked-file upgrade failures while preserving local sessions and message state.
+
+## Build from source
 
 ### Requirements
 
 - Node.js 22+
 - pnpm 9+
 - Rust stable
-- Tauri 2 prerequisites
-- WSL2 for Windows runtime development/testing
+- Tauri 2 Windows build prerequisites
 
-Clone and install dependencies:
+Runtime dependencies such as Tuwunel and Mautrix are produced by CI for release builds. End users do not need Go, Rust, Python or C/C++ build tools.
+
+Clone and validate:
 
 ```bash
 git clone https://github.com/sedatyildiznet/unibox.git
 cd unibox
+git switch native-runtime
 pnpm install --frozen-lockfile
-```
-
-Run validation:
-
-```bash
 pnpm check
-pnpm build
-cargo check --workspace --locked
 cargo test --workspace --locked
 ```
 
-Run development mode:
-
-```bash
-pnpm dev
-```
-
-Build the raw Windows executable:
-
-```bash
-pnpm tauri build --no-bundle
-```
-
-Build the NSIS Windows setup package:
+Build an NSIS package after the native resource slot has been populated:
 
 ```bash
 pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
 ```
 
-## Release Process
+## Release gate
 
-The release workflow is triggered by version tags matching:
-
-```text
-v*
-```
-
-Example:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The GitHub Actions release workflow performs validation, builds the Windows application and prepares a GitHub Release through `tauri-action`.
-
-### Important: updater signing
-
-Production releases are intentionally blocked until the updater signing configuration is completed.
-
-The placeholder public key in:
+The canonical Windows all-services workflow is:
 
 ```text
-apps/desktop/src-tauri/tauri.conf.json
+.github/workflows/native-v050-all-services-release.yml
 ```
 
-must be replaced, and these secrets must be configured in GitHub Actions:
+It is intentionally heavyweight and is not run on every source commit. The final release path must validate the application source, build the Windows runtime, build every required connector, generate connector configs and appservice registrations, start the native runtime, verify local connector ports and BridgeV2 login-flow endpoints, build the NSIS installer, generate SHA-256 sums, and only then publish `v0.5.0-native-all`.
+
+Expected release assets:
 
 ```text
-TAURI_SIGNING_PRIVATE_KEY
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+Unibox-Native-Setup.exe
+SHA256SUMS.txt
 ```
 
-Never commit the private updater key to the repository.
+The release target must be the exact Git commit used for the build.
 
 ## Privacy
 
-Unibox itself is designed not to upload message history to an Unibox-operated cloud. Connected services still receive network traffic according to their own protocols and policies, and GitHub may be contacted for update checks.
+Unibox does not require an Unibox-operated cloud account. Local Matrix state, connector sessions, media/cache data and local credentials stay on the device by default. Connected third-party services still receive traffic according to their own protocols and policies.
 
 See [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Security
 
-The security baseline includes least-privilege Tauri capabilities, localhost-only services, signed application updates, pinned connector artifacts, cryptographic hash verification, automatic connector rollback, redacted diagnostics and migration-safe backups.
+The native runtime uses loopback-only services, generated local secrets, restricted connector exposure, immutable runtime resource slots and release-time validation.
 
 See [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
-## Repository Structure
+## Repository structure
 
 ```text
-.github/workflows/   GitHub Actions CI and release pipelines
-apps/desktop/        Tauri + React desktop application
-crates/              Rust workspace / backend components
-docs/                Architecture, privacy and technical documentation
-installer/           Windows installation/bootstrap helpers
-scripts/             Build and verification scripts
+.github/workflows/                 CI and release gates
+apps/desktop/                      Tauri + React desktop app
+apps/desktop/src-tauri/resources/  versioned native runtime slots
+crates/                            Rust workspace
+docs/                              architecture and security docs
+registry/stable.json               connector catalog
 ```
 
 ## License

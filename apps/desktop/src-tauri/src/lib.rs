@@ -27,10 +27,6 @@ impl AppState {
     }
 }
 
-fn is_exposed_native_connector(connector: &ConnectorDefinition) -> bool {
-    matches!(connector.id.as_str(), "whatsapp" | "telegram")
-}
-
 #[cfg(target_os = "windows")]
 fn normalize_windows_path(path: PathBuf) -> PathBuf {
     let raw = path.to_string_lossy();
@@ -53,9 +49,28 @@ fn connector_registry(state: State<'_, AppState>) -> Vec<ConnectorDefinition> {
     state
         .registry
         .iter()
-        .filter(|connector| is_exposed_native_connector(connector))
+        .filter(|connector| state.runtime.connector_available(connector))
         .cloned()
         .collect()
+}
+
+#[tauri::command]
+fn connector_requirements(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let connector = state.connector(&id)?;
+    Ok(state.runtime.connector_requirements(&connector))
+}
+
+#[tauri::command]
+fn connector_configure(
+    id: String,
+    settings: Value,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let connector = state.connector(&id)?;
+    state
+        .runtime
+        .configure_connector(&connector, settings)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -214,6 +229,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             connector_registry,
+            connector_requirements,
+            connector_configure,
             runtime_status,
             bootstrap_runtime,
             start_runtime,

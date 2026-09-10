@@ -39,7 +39,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tuwunel-windows-native
-          path: apps/desktop/src-tauri/resources/native
+          path: apps/desktop/src-tauri/resources/native-v033
           repository: sedatyildiznet/unibox
           run-id: 34465477705
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -48,7 +48,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-whatsapp
-          path: apps/desktop/src-tauri/resources/native/connectors
+          path: apps/desktop/src-tauri/resources/native-v033/connectors
           repository: sedatyildiznet/unibox
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +57,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: native-bridge-telegram
-          path: apps/desktop/src-tauri/resources/native/connectors
+          path: apps/desktop/src-tauri/resources/native-v033/connectors
           repository: sedatyildiznet/unibox
           run-id: 34506961399
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -66,9 +66,9 @@ jobs:
         shell: pwsh
         run: |
           $required = @(
-            'apps/desktop/src-tauri/resources/native/tuwunel.exe',
-            'apps/desktop/src-tauri/resources/native/connectors/mautrix-whatsapp.exe',
-            'apps/desktop/src-tauri/resources/native/connectors/mautrix-telegram.exe',
+            'apps/desktop/src-tauri/resources/native-v033/tuwunel.exe',
+            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-whatsapp.exe',
+            'apps/desktop/src-tauri/resources/native-v033/connectors/mautrix-telegram.exe',
             'apps/desktop/src-tauri/windows/hooks.nsh'
           )
           foreach ($path in $required) {
@@ -123,18 +123,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = 'v0.3.2-native-installerfix'
+          $tag = 'v0.3.3-native-slotfix'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete $tag --cleanup-tag --yes --repo $env:GITHUB_REPOSITORY
           }
           $notes = @"
-          WSL-free native Windows build with in-place upgrade fix.
+          WSL-free native Windows build with immutable runtime resource slots.
 
           Fixes:
-          - installer stops Unibox, Tuwunel, WhatsApp and Telegram native processes before replacing bundled executables
-          - retries locked runtime binary cleanup before file copy
+          - bundles Tuwunel and native connectors under a new versioned resource directory, so Windows never needs to overwrite a currently-running runtime executable
+          - new app startup stops only legacy Unibox runtime processes from the old resource path
           - preserves AppData message/session/database data
           - includes the latest native UI and connector fixes from native-runtime
           "@
-          gh release create $tag dist-native/* --target 59cf52fd32a852570dda673e40e1bd6c23c630e4 --title 'Unibox v0.3.2 Native Windows Installer Fix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          gh release create $tag dist-native/* --target 31a07c2be410539e938e9816313abb1aa80ebe53 --title 'Unibox v0.3.3 Native Windows Slot Fix' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY

@@ -113,7 +113,7 @@ jobs:
               return _Pw()
           '@ | Set-Content pwd.py -Encoding utf8
 
-          Set-Content unibox_googlechat_launcher.py -Value 'import mautrix_googlechat.__main__' -Encoding utf8
+          Set-Content unibox_googlechat_launcher.py -Value 'import os; os.environ.setdefault("HOME", os.environ.get("USERPROFILE", ".")); import mautrix_googlechat.__main__' -Encoding utf8
 
           $args = @(
             '--noconfirm',

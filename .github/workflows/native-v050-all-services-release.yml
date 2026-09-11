@@ -357,7 +357,7 @@ jobs:
           & ./artifact/mautrix-signal.exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Signal config generation failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
-          & ./artifact/mautrix-signal.exe -g -c $cfg -r $reg
+          & ./artifact/mautrix-signal.exe -n -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Signal registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
@@ -423,7 +423,7 @@ jobs:
           Copy-Item 'vendor/discord/example-config.yaml' $cfg -Force
           if (-not (Test-Path $cfg)) { throw 'Discord example config copy failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
-          & ./artifact/mautrix-discord.exe -g -c $cfg -r $reg
+          & ./artifact/mautrix-discord.exe -n -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Discord registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:

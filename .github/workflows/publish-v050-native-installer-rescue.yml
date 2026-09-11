@@ -105,6 +105,13 @@ jobs:
               return value if mime else value
           '@ | Set-Content magic.py -Encoding utf8
 
+          @'
+          class _Pw:
+              pw_name = "windows"
+          def getpwuid(uid):
+              return _Pw()
+          '@ | Set-Content pwd.py -Encoding utf8
+
           Set-Content unibox_googlechat_launcher.py -Value 'import mautrix_googlechat.__main__' -Encoding utf8
 
           $args = @(
@@ -116,6 +123,7 @@ jobs:
             '--add-data', 'mautrix_googlechat/example-config.yaml;mautrix_googlechat',
             '--hidden-import', 'mautrix_googlechat.__main__',
             '--hidden-import', 'magic',
+            '--hidden-import', 'pwd',
             '--exclude-module', 'tkinter',
             'unibox_googlechat_launcher.py'
           )
@@ -130,6 +138,7 @@ jobs:
               '--add-data', 'mautrix_googlechat/web/static;mautrix_googlechat/web/static',
               '--hidden-import', 'mautrix_googlechat.__main__',
               '--hidden-import', 'magic',
+              '--hidden-import', 'pwd',
               '--exclude-module', 'tkinter',
               'unibox_googlechat_launcher.py'
             )

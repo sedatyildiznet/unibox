@@ -266,9 +266,12 @@ jobs:
           $ffiCargoRaw = $ffiCargoRaw.Replace('crate-type = ["staticlib"]','crate-type = ["staticlib", "cdylib"]')
           Set-Content $ffiCargo -Value $ffiCargoRaw -NoNewline -Encoding utf8
 
-          $env:CC_x86_64_pc_windows_gnu = Join-Path $mingwBin 'gcc.exe'
-          $env:CXX_x86_64_pc_windows_gnu = Join-Path $mingwBin 'g++.exe'
-          $env:AR_x86_64_pc_windows_gnu = Join-Path $mingwBin 'ar.exe'
+          $env:CC = Join-Path $mingwBin 'gcc.exe'
+          $env:CXX = Join-Path $mingwBin 'g++.exe'
+          $env:AR = Join-Path $mingwBin 'ar.exe'
+          $env:CC_x86_64_pc_windows_gnu = $env:CC
+          $env:CXX_x86_64_pc_windows_gnu = $env:CXX
+          $env:AR_x86_64_pc_windows_gnu = $env:AR
           $env:CMAKE_GENERATOR = 'MinGW Makefiles'
           $env:CMAKE_C_COMPILER = Join-Path $mingwBin 'gcc.exe'
           $env:CMAKE_CXX_COMPILER = Join-Path $mingwBin 'g++.exe'
@@ -361,7 +364,8 @@ jobs:
 
           $olmRoot = (Resolve-Path 'vendor/olm').Path
           $olmBuild = Join-Path $olmRoot 'build-mingw'
-          cmake -S $olmRoot -B $olmBuild -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          $cmakeArgs = @("-S", $olmRoot, "-B", $olmBuild, "-G", "MinGW Makefiles", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+          & cmake $cmakeArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build $olmBuild --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,0 +1,40 @@
+name: Debug Google Chat Native Bundle
+
+on:
+  push:
+    branches: [native-runtime]
+    paths:
+      - '.github/workflows/debug-googlechat-native.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build narrow Google Chat bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --depth 1 https://github.com/mautrix/googlechat.git vendor/googlechat
+          Set-Location vendor/googlechat
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+          Set-Content unibox_googlechat_launcher.py -Value 'import mautrix_googlechat.__main__' -Encoding utf8
+          pyinstaller --noconfirm --clean --onefile --name mautrix-googlechat --hidden-import mautrix_googlechat.__main__ --collect-data mautrix_googlechat unibox_googlechat_launcher.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path dist/mautrix-googlechat.exe)) { throw 'Google Chat EXE not produced.' }
+          & dist/mautrix-googlechat.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debug-googlechat-native
+          path: vendor/googlechat/dist/mautrix-googlechat.exe
+          if-no-files-found: error

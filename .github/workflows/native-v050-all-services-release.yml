@@ -357,7 +357,7 @@ jobs:
           & ./artifact/mautrix-signal.exe -e -c $cfg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Signal config generation failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
-          & ./artifact/mautrix-signal.exe -n -g -c $cfg -r $reg
+          & ./artifact/mautrix-signal.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Signal registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
@@ -405,6 +405,33 @@ jobs:
           go mod download
           go get go.mau.fi/zeroconfig@latest
           go mod tidy
+
+          $utilDir = (go list -m -f '{{.Dir}}' go.mau.fi/util).Trim()
+          if ($utilDir -and (Test-Path $utilDir)) {
+            $upgrade = Join-Path $utilDir 'configupgrade\upgrade.go'
+            if (Test-Path $upgrade) {
+              attrib -R $upgrade 2>$null
+              $upgradeRaw = Get-Content $upgrade -Raw
+              if ($upgradeRaw -notmatch 'tempFile\.Close\(\)') {
+                $renameNeedle = "`terr = os.Rename(tempFile.Name(), configPath)"
+                if (-not $upgradeRaw.Contains($renameNeedle)) {
+                  throw 'Discord configupgrade layout changed upstream.'
+                }
+                $replacement = @(
+                  'err = tempFile.Close()',
+                  'if err != nil {',
+                  '    _ = os.Remove(tempFile.Name())',
+                  '    return output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)',
+                  '}',
+                  'err = os.Rename(tempFile.Name(), configPath)'
+                ) -join [Environment]::NewLine
+                $upgradeRaw = $upgradeRaw.Replace($renameNeedle, $replacement.Trim())
+                Set-Content $upgrade -Value $upgradeRaw -NoNewline -Encoding utf8
+                gofmt -w $upgrade
+              }
+            }
+          }
+
           $env:CGO_ENABLED = '1'
           $env:CC = Join-Path $mingwBin 'gcc.exe'
           $env:CXX = Join-Path $mingwBin 'g++.exe'
@@ -423,7 +450,7 @@ jobs:
           Copy-Item 'vendor/discord/example-config.yaml' $cfg -Force
           if (-not (Test-Path $cfg)) { throw 'Discord example config copy failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
-          & ./artifact/mautrix-discord.exe -n -g -c $cfg -r $reg
+          & ./artifact/mautrix-discord.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Discord registration generation failed.' }
       - uses: actions/upload-artifact@v4
         with:

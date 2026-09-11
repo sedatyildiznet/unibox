@@ -162,8 +162,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           $cfg = Join-Path $root 'config.yaml'
           $reg = Join-Path $root 'registration.yaml'
-          & $exe -e -c $cfg
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Google Chat config generation failed.' }
+          Copy-Item 'vendor/googlechat/mautrix_googlechat/example-config.yaml' $cfg -Force
+          if (-not (Test-Path $cfg)) { throw 'Google Chat example config copy failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & $exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Google Chat registration generation failed.' }

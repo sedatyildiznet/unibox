@@ -1,0 +1,39 @@
+name: Stage v0.5.0 Signal Patch
+
+on:
+  push:
+    branches: [native-runtime]
+    paths:
+      - '.github/workflows/stage-v050-signal-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+          fetch-depth: 0
+      - name: Add explicit MinGW compilers for boring-sys
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('ci-staging/native-v050-all-services-release.yml')
+          s = p.read_text()
+          old = "          $env:CC_x86_64_pc_windows_gnu = Join-Path $mingwBin 'gcc.exe'\n          $env:CXX_x86_64_pc_windows_gnu = Join-Path $mingwBin 'g++.exe'\n          $env:AR_x86_64_pc_windows_gnu = Join-Path $mingwBin 'ar.exe'\n"
+          new = "          $env:CC = Join-Path $mingwBin 'gcc.exe'\n          $env:CXX = Join-Path $mingwBin 'g++.exe'\n          $env:AR = Join-Path $mingwBin 'ar.exe'\n          $env:CC_x86_64_pc_windows_gnu = $env:CC\n          $env:CXX_x86_64_pc_windows_gnu = $env:CXX\n          $env:AR_x86_64_pc_windows_gnu = $env:AR\n"
+          if old not in s:
+              raise SystemExit('Expected Signal compiler block not found')
+          out = Path('ci-staging/native-v050-all-services-release-v2.yml')
+          out.write_text(s.replace(old, new, 1))
+      - name: Push staged workflow v2
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-staging/native-v050-all-services-release-v2.yml
+          git commit -m "ci: stage v050 Signal compiler fix"
+          git push origin HEAD:native-runtime

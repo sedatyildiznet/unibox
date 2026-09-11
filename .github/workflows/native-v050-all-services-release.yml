@@ -298,6 +298,34 @@ jobs:
           Set-Content $cflags -Value $raw -NoNewline -Encoding utf8
           gofmt -w $cflags
 
+          go mod download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $utilDir = (go list -m -f '{{.Dir}}' go.mau.fi/util).Trim()
+          if ($utilDir -and (Test-Path $utilDir)) {
+            $upgrade = Join-Path $utilDir 'configupgrade\upgrade.go'
+            if (Test-Path $upgrade) {
+              attrib -R $upgrade 2>$null
+              $upgradeRaw = Get-Content $upgrade -Raw
+              if ($upgradeRaw -notmatch 'tempFile\.Close\(\)') {
+                $renameNeedle = "`terr = os.Rename(tempFile.Name(), configPath)"
+                if (-not $upgradeRaw.Contains($renameNeedle)) {
+                  throw 'Signal configupgrade layout changed upstream.'
+                }
+                $replacement = @(
+                  'err = tempFile.Close()',
+                  'if err != nil {',
+                  '    _ = os.Remove(tempFile.Name())',
+                  '    return output, true, fmt.Errorf("failed to close temp file before replacing config: %w", err)',
+                  '}',
+                  'err = os.Rename(tempFile.Name(), configPath)'
+                ) -join [Environment]::NewLine
+                $upgradeRaw = $upgradeRaw.Replace($renameNeedle, $replacement.Trim())
+                Set-Content $upgrade -Value $upgradeRaw -NoNewline -Encoding utf8
+                gofmt -w $upgrade
+              }
+            }
+          }
+
           $env:LIBRARY_PATH = "$ffiDir;$env:LIBRARY_PATH"
           $env:CGO_ENABLED = '1'
           New-Item -ItemType Directory -Force -Path ../../artifact | Out-Null
@@ -392,8 +420,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           $cfg = Join-Path $root 'config.yaml'
           $reg = Join-Path $root 'registration.yaml'
-          & ./artifact/mautrix-discord.exe -e -c $cfg
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cfg)) { throw 'Discord config generation failed.' }
+          Copy-Item 'vendor/discord/example-config.yaml' $cfg -Force
+          if (-not (Test-Path $cfg)) { throw 'Discord example config copy failed.' }
           & ./scripts/ci/patch-generated-matrix-config.ps1 -Path $cfg
           & ./artifact/mautrix-discord.exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Discord registration generation failed.' }
@@ -426,7 +454,7 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller
           Set-Content unibox_googlechat_launcher.py -Value 'import runpy; runpy.run_module("mautrix_googlechat", run_name="__main__")' -Encoding utf8
-          pyinstaller --noconfirm --clean --onefile --name mautrix-googlechat --collect-all mautrix --collect-all mautrix_googlechat --collect-all maugclib unibox_googlechat_launcher.py
+          pyinstaller --noconfirm --clean --onefile --name mautrix-googlechat --hidden-import mautrix_googlechat.__main__ --collect-all mautrix_googlechat --collect-all maugclib unibox_googlechat_launcher.py
           New-Item -ItemType Directory -Force -Path ../../artifact | Out-Null
           Copy-Item dist/mautrix-googlechat.exe ../../artifact/mautrix-googlechat.exe
       - name: Smoke Google Chat config and registration

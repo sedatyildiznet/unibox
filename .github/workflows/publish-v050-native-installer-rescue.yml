@@ -65,6 +65,7 @@ jobs:
           $reqs | Set-Content requirements-windows.txt -Encoding utf8
           python -m pip install --upgrade pip
           python -m pip install -r requirements-windows.txt
+          python -m pip install async_timeout
           python -m pip install pyinstaller
 
           @'

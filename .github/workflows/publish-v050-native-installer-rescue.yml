@@ -179,25 +179,123 @@ jobs:
           & $exe -g -c $cfg -r $reg
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $reg)) { throw 'Google Chat registration generation failed.' }
 
-      - name: Bundle Telegram application credentials
+      - name: Bundle Telegram application credentials when available
         shell: pwsh
         env:
           TG_ID: ${{ secrets.UNIBOX_TELEGRAM_API_ID }}
           TG_HASH: ${{ secrets.UNIBOX_TELEGRAM_API_HASH }}
         run: |
+          $target = '${{ env.NATIVE_SLOT }}/telegram-app.json'
           if ([string]::IsNullOrWhiteSpace($env:TG_ID) -or [string]::IsNullOrWhiteSpace($env:TG_HASH)) {
-            throw 'Missing repository secrets UNIBOX_TELEGRAM_API_ID and/or UNIBOX_TELEGRAM_API_HASH.'
+            Remove-Item $target -Force -ErrorAction SilentlyContinue
+            Write-Warning 'Telegram app credentials are not configured. Telegram binary is bundled, but Telegram will remain hidden by the desktop runtime.'
+            exit 0
           }
           $parsed = 0L
           if (-not [long]::TryParse($env:TG_ID,[ref]$parsed) -or $parsed -le 0) {
             throw 'UNIBOX_TELEGRAM_API_ID must be a positive integer.'
           }
           $hash = $env:TG_HASH.Trim().ToLowerInvariant()
-          if ($hash -notmatch '^[0-9a-f]{32}$') {
+          if ($hash -notmatch '^[0-9a-f]{32}
+
+      - name: Verify complete native runtime
+        shell: pwsh
+        run: |
+          $root = '${{ env.NATIVE_SLOT }}'
+          $required = @(
+            "$root/tuwunel.exe",
+            "$root/connectors/mautrix-whatsapp.exe",
+            "$root/connectors/mautrix-telegram.exe",
+            "$root/connectors/mautrix-signal.exe",
+            "$root/connectors/signal_ffi.dll",
+            "$root/connectors/mautrix-discord.exe",
+            "$root/connectors/mautrix-instagram.exe",
+            "$root/connectors/mautrix-meta.exe",
+            "$root/connectors/mautrix-gmessages.exe",
+            "$root/connectors/mautrix-googlechat.exe",
+            "$root/connectors/mautrix-slack.exe",
+            "$root/connectors/mautrix-twitter.exe",
+            "$root/connectors/mautrix-bluesky.exe",
+            "$root/connectors/mautrix-linkedin.exe",
+            "$root/connectors/mautrix-gvoice.exe",
+            "$root/connectors/mautrix-zulip.exe",
+            "$root/connectors/mautrix-irc.exe"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing runtime file: $file" }
+          }
+          $count = (Get-ChildItem "$root/connectors/mautrix-*.exe").Count
+          if ($count -ne 15) { throw "Expected 15 connector EXEs, found $count." }
+
+      - name: Validate source
+        shell: pwsh
+        run: |
+          pnpm check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          pnpm tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $installer = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer was not generated.' }
+          Copy-Item $installer.FullName dist/Unibox-Native-Setup.exe -Force
+          $hash = (Get-FileHash dist/Unibox-Native-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Unibox-Native-Setup.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Write-Host "SHA256=$hash"
+
+      - name: Fresh install smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Resolve-Path 'dist/Unibox-Native-Setup.exe').Path
+          $install = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Fresh installer exited with $($install.ExitCode)." }
+          $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'Unibox' } | Select-Object -First 1
+          if (-not $entry) { throw 'Unibox uninstall registration was not created.' }
+          $installDir = $entry.InstallLocation
+          if ([string]::IsNullOrWhiteSpace($installDir)) {
+            $installDir = Split-Path $entry.UninstallString.Trim('"') -Parent
+          }
+          $app = Join-Path $installDir 'unibox-desktop.exe'
+          if (-not (Test-Path $app)) { throw "Installed desktop EXE missing: $app" }
+          if (-not (Test-Path (Join-Path $installDir 'resources\native-v050\tuwunel.exe'))) {
+            throw 'Installed Tuwunel resource is missing.'
+          }
+          $proc = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) { throw "Installed Unibox exited with $($proc.ExitCode)." }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unibox-v050-native-all-rescue
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish installer to v0.5.0-native-all
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = 'v0.5.0-native-all'
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target '${{ github.sha }}' --title 'Unibox v0.5.0 Native All Services' --prerelease --notes 'Windows-native all-services release.' --repo $env:GITHUB_REPOSITORY
+          }
+          gh release upload $tag dist/Unibox-Native-Setup.exe dist/SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
+) {
             throw 'UNIBOX_TELEGRAM_API_HASH must be exactly 32 hexadecimal characters.'
           }
           @{ api_id=$parsed; api_hash=$hash } | ConvertTo-Json -Compress |
-            Set-Content '${{ env.NATIVE_SLOT }}/telegram-app.json' -Encoding utf8
+            Set-Content $target -Encoding utf8
 
       - name: Verify complete native runtime
         shell: pwsh

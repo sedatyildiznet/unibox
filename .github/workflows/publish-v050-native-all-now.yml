@@ -1,0 +1,33 @@
+name: Publish v0.5.0 Native All Release
+
+on:
+  push:
+    branches:
+      - native-runtime
+    paths:
+      - '.github/workflows/publish-v050-native-all-now.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="v0.5.0-native-all"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Unibox v0.5.0 Native All Services" \
+            --prerelease \
+            --notes "Windows-native all-services release candidate. This tag points to the current native-runtime HEAD. Source archives are available now; the NSIS installer will be attached after the remaining Windows connector/package jobs pass."

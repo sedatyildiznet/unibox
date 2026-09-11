@@ -68,6 +68,13 @@ jobs:
           python -m pip install async_timeout
           python -m pip install pyinstaller
 
+          $mautrixConfigFile = (python -c "import mautrix.util.config.file as f; print(f.__file__)").Trim()
+          if (-not (Test-Path $mautrixConfigFile)) { throw 'Could not locate mautrix config writer.' }
+          $configRaw = Get-Content $mautrixConfigFile -Raw
+          if ($configRaw -notmatch 'os\.rename\(tf\.name, self\.path\)') { throw 'Mautrix config writer layout changed.' }
+          $configRaw = $configRaw.Replace('os.rename(tf.name, self.path)', 'os.replace(tf.name, self.path)')
+          Set-Content $mautrixConfigFile -Value $configRaw -NoNewline -Encoding utf8
+
           @'
           from __future__ import annotations
           import mimetypes
@@ -126,6 +133,8 @@ jobs:
             '--hidden-import', 'mautrix_googlechat.__main__',
             '--hidden-import', 'magic',
             '--hidden-import', 'pwd',
+            '--hidden-import', 'mautrix_googlechat.util',
+            '--hidden-import', 'mautrix_googlechat.util.color_log',
             '--exclude-module', 'tkinter',
             'unibox_googlechat_launcher.py'
           )
@@ -142,6 +151,8 @@ jobs:
               '--hidden-import', 'mautrix_googlechat.__main__',
               '--hidden-import', 'magic',
               '--hidden-import', 'pwd',
+              '--hidden-import', 'mautrix_googlechat.util',
+              '--hidden-import', 'mautrix_googlechat.util.color_log',
               '--exclude-module', 'tkinter',
               'unibox_googlechat_launcher.py'
             )

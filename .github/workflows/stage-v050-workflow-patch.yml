@@ -1,0 +1,40 @@
+name: Stage v0.5.0 Workflow Patch
+
+on:
+  push:
+    branches: [native-runtime]
+    paths:
+      - '.github/workflows/stage-v050-workflow-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-runtime
+          fetch-depth: 0
+      - name: Build corrected workflow copy
+        shell: python
+        run: |
+          from pathlib import Path
+          src = Path('.github/workflows/native-v050-all-services-release.yml')
+          s = src.read_text()
+          old = '          cmake -S $olmRoot -B $olmBuild -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5\n'
+          new = '          $cmakeArgs = @("-S", $olmRoot, "-B", $olmBuild, "-G", "MinGW Makefiles", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5")\n          & cmake $cmakeArgs\n'
+          if old not in s:
+              raise SystemExit('Expected Discord CMake line not found')
+          out = Path('ci-staging/native-v050-all-services-release.yml')
+          out.parent.mkdir(exist_ok=True)
+          out.write_text(s.replace(old, new, 1))
+      - name: Push staged blob
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-staging/native-v050-all-services-release.yml
+          git commit -m "ci: stage corrected v050 workflow content"
+          git push origin HEAD:native-runtime
